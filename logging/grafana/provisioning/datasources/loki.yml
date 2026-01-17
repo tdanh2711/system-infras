@@ -1,0 +1,34 @@
+# =============================================================================
+# GRAFANA DATASOURCE PROVISIONING - LOKI
+# =============================================================================
+# This file auto-configures Loki as a datasource on Grafana startup
+# Documentation: https://grafana.com/docs/grafana/latest/administration/provisioning/
+
+apiVersion: 1
+
+deleteDatasources:
+  - name: Loki
+    orgId: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://system-loki:3100
+    isDefault: true
+    editable: false
+    jsonData:
+      maxLines: 1000
+      timeout: 60
+      derivedFields:
+        # Link to related logs by container
+        - name: Container
+          matcherRegex: 'container="([^"]+)"'
+          url: '/explore?orgId=1&left=["now-1h","now","Loki",{"expr":"{container=\"$${__value.raw}\"}"}]'
+          datasourceUid: loki
+        # Link to related logs by project
+        - name: Project
+          matcherRegex: 'project="([^"]+)"'
+          url: '/explore?orgId=1&left=["now-1h","now","Loki",{"expr":"{project=\"$${__value.raw}\"}"}]'
+          datasourceUid: loki
+    version: 1

@@ -1,0 +1,116 @@
+# =============================================================================
+# LOKI CONFIGURATION
+# =============================================================================
+# Single-node, filesystem-based setup optimized for small to medium deployments
+# Documentation: https://grafana.com/docs/loki/latest/configuration/
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+# =============================================================================
+# INGESTER - Handles incoming log streams
+# =============================================================================
+ingester:
+  wal:
+    enabled: true
+    dir: /loki/wal
+  lifecycler:
+    address: 127.0.0.1
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+    final_sleep: 0s
+  chunk_idle_period: 1h
+  max_chunk_age: 1h
+  chunk_target_size: 1048576
+  chunk_retain_period: 30s
+
+# =============================================================================
+# SCHEMA CONFIG - Index and chunk storage
+# =============================================================================
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+# =============================================================================
+# STORAGE CONFIG - Filesystem-based storage
+# =============================================================================
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+    cache_ttl: 24h
+  filesystem:
+    directory: /loki/chunks
+
+# =============================================================================
+# COMPACTOR - Background maintenance
+# =============================================================================
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: filesystem
+
+# =============================================================================
+# LIMITS CONFIG - Rate limiting and retention
+# =============================================================================
+limits_config:
+  retention_period: 336h  # 14 days
+  ingestion_rate_mb: 10
+  ingestion_burst_size_mb: 20
+  max_streams_per_user: 10000
+  max_line_size: 256kb
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h  # 7 days
+  max_query_parallelism: 32
+  max_query_series: 500
+  max_entries_limit_per_query: 5000
+
+# =============================================================================
+# CHUNK STORE CONFIG
+# =============================================================================
+chunk_store_config:
+  chunk_cache_config:
+    embedded_cache:
+      enabled: true
+      max_size_mb: 100
+
+# =============================================================================
+# QUERY RANGE CONFIG
+# =============================================================================
+query_range:
+  align_queries_with_step: true
+  max_retries: 5
+  cache_results: true
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+# =============================================================================
+# FRONTEND CONFIG
+# =============================================================================
+frontend:
+  max_outstanding_per_tenant: 2048
+  compress_responses: true
+
+# =============================================================================
+# ANALYTICS - Disabled for privacy
+# =============================================================================
+analytics:
+  reporting_enabled: false

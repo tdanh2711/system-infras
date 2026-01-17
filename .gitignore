@@ -1,0 +1,40 @@
+# =============================================================================
+# SYSTEM-INFRAS .GITIGNORE
+# =============================================================================
+
+# Environment files (contain secrets)
+.env
+projects.env
+.credentials
+
+# Caddy data (certificates, etc.)
+caddy/data/
+caddy/config/
+
+# Grafana data
+logging/grafana/data/
+
+# Loki data
+logging/loki/data/
+
+# Promtail positions
+logging/promtail/positions.yaml
+
+# Log files
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup

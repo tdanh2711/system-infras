@@ -1,0 +1,18 @@
+# =============================================================================
+# GRAFANA DASHBOARD PROVISIONING
+# =============================================================================
+# Auto-loads dashboards from the specified folder on startup
+
+apiVersion: 1
+
+providers:
+  - name: 'System Infrastructure Dashboards'
+    orgId: 1
+    folder: 'System'
+    folderUid: 'system-dashboards'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json
