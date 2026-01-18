@@ -1,0 +1,3 @@
+# This directory contains Caddy configuration files from projects.
+# Each project should symlink or copy their Caddy config here.
+# Example: ln -s /path/to/myproject/caddy.conf myproject.caddy

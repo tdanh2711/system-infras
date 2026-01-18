@@ -2,9 +2,11 @@
 # CADDY CONFIGURATION - SYSTEM INFRASTRUCTURE
 # =============================================================================
 # This Caddyfile handles:
-# - Per-project log subdomains with basic auth
-# - X-Project header injection for Grafana isolation
+# - Automatic import of project configs from /etc/caddy/projects/
+# - Shared snippets (basic_auth) for all projects
 # - Automatic HTTPS via Let's Encrypt
+#
+# Projects add their own Caddy configs by symlinking to caddy-projects/
 
 # =============================================================================
 # GLOBAL OPTIONS
@@ -23,7 +25,7 @@
 # =============================================================================
 # SNIPPET: Basic Auth
 # =============================================================================
-# Reusable basic auth block
+# Reusable basic auth block - projects can use: import basic_auth
 # Password hash generated with: caddy hash-password
 (basic_auth) {
     basicauth {
@@ -34,76 +36,11 @@
 }
 
 # =============================================================================
-# PROJECT: projecta
+# IMPORT PROJECT CONFIGS
 # =============================================================================
-syslog.projecta.com {
-    import basic_auth
-
-    # Inject project header for Grafana isolation
-    header_up X-Project "projecta"
-
-    reverse_proxy system-grafana:3000 {
-        header_up X-Project "projecta"
-    }
-
-    log {
-        output file /data/logs/access-projecta.log {
-            roll_size 10mb
-            roll_keep 5
-        }
-    }
-}
-
-# =============================================================================
-# PROJECT: projectb
-# =============================================================================
-syslog.projectb.com {
-    import basic_auth
-
-    header_up X-Project "projectb"
-
-    reverse_proxy system-grafana:3000 {
-        header_up X-Project "projectb"
-    }
-
-    log {
-        output file /data/logs/access-projectb.log {
-            roll_size 10mb
-            roll_keep 5
-        }
-    }
-}
-
-# =============================================================================
-# TEMPLATE FOR NEW PROJECTS
-# =============================================================================
-# Copy this block and replace {PROJECT} with your project name:
-#
-# syslog.{PROJECT}.com {
-#     import basic_auth
-#
-#     header_up X-Project "{PROJECT}"
-#
-#     reverse_proxy system-grafana:3000 {
-#         header_up X-Project "{PROJECT}"
-#     }
-#
-#     log {
-#         output file /data/logs/access-{PROJECT}.log {
-#             roll_size 10mb
-#             roll_keep 5
-#         }
-#     }
-# }
-
-# =============================================================================
-# OPTIONAL: Direct Grafana access (admin only)
-# =============================================================================
-# Uncomment if you need direct admin access to Grafana
-# grafana.example.com {
-#     import basic_auth
-#     reverse_proxy system-grafana:3000
-# }
+# Import all .caddy files from projects directory
+# Each project manages its own config file
+import /etc/caddy/projects/*.caddy
 
 # =============================================================================
 # OPTIONAL: Health check endpoint

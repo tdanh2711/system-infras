@@ -1,0 +1,36 @@
+# =============================================================================
+# EXAMPLE PROJECT CADDY CONFIG
+# =============================================================================
+# Copy this file to your project and customize it.
+# Then symlink it here: ln -s /path/to/your-project/caddy.conf yourproject.caddy
+#
+# Rename this file to remove .disabled suffix to activate it.
+# =============================================================================
+
+# Logging dashboard for your project
+syslog.yourproject.com {
+    import basic_auth
+
+    header_up X-Project "yourproject"
+
+    reverse_proxy system-grafana:3000 {
+        header_up X-Project "yourproject"
+    }
+
+    log {
+        output file /data/logs/access-yourproject.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}
+
+# Your project's main domain (optional)
+# api.yourproject.com {
+#     reverse_proxy yourproject-backend:8080
+# }
+
+# Your project's frontend (optional)
+# yourproject.com {
+#     reverse_proxy yourproject-frontend:3000
+# }
