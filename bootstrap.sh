@@ -3,9 +3,8 @@
 # SYSTEM-INFRAS BOOTSTRAP SCRIPT
 # =============================================================================
 # This script:
-# 1. Discovers project networks by prefix (e.g., projecta-backend, projecta-frontend)
-# 2. Connects Caddy to all discovered project networks
-# 3. Reloads Caddy configuration
+# 1. Connects Caddy to networks listed in caddy.env
+# 2. Reloads Caddy configuration
 #
 # Usage: ./bootstrap.sh
 # Safe to run multiple times (idempotent)
@@ -17,7 +16,7 @@ set -e
 # CONFIGURATION
 # =============================================================================
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECTS_FILE="${SCRIPT_DIR}/projects.env"
+CADDY_ENV_FILE="${SCRIPT_DIR}/caddy.env"
 CADDY_CONTAINER="system-caddy"
 LOGGING_NETWORK="logging-net"
 
@@ -90,10 +89,10 @@ validate_environment() {
         exit 1
     fi
 
-    # Check projects.env exists
-    if [ ! -f "$PROJECTS_FILE" ]; then
-        log_error "projects.env not found at: $PROJECTS_FILE"
-        log_info "Copy projects.env.example to projects.env and configure your projects"
+    # Check caddy.env exists
+    if [ ! -f "$CADDY_ENV_FILE" ]; then
+        log_error "caddy.env not found at: $CADDY_ENV_FILE"
+        log_info "Copy caddy.env.example to caddy.env and configure your networks"
         exit 1
     fi
 
@@ -103,18 +102,18 @@ validate_environment() {
 # =============================================================================
 # MAIN FUNCTIONS
 # =============================================================================
-load_projects() {
-    log_info "Loading projects from: $PROJECTS_FILE"
+load_networks() {
+    log_info "Loading networks from: $CADDY_ENV_FILE"
 
-    # Source the projects file
-    . "$PROJECTS_FILE"
+    # Source the caddy env file
+    . "$CADDY_ENV_FILE"
 
-    if [ -z "$PROJECTS" ]; then
-        log_error "PROJECTS variable is empty or not set in projects.env"
+    if [ -z "$NETWORKS" ]; then
+        log_error "NETWORKS variable is empty or not set in caddy.env"
         exit 1
     fi
 
-    log_success "Projects loaded: $PROJECTS"
+    log_success "Networks to connect: $NETWORKS"
 }
 
 create_logging_network() {
@@ -129,14 +128,8 @@ create_logging_network() {
     fi
 }
 
-# Find all networks with project prefix
-find_project_networks() {
-    project="$1"
-    docker network ls --format '{{.Name}}' --filter "name=^${project}-"
-}
-
 connect_caddy_to_networks() {
-    log_info "Connecting Caddy to project networks..."
+    log_info "Connecting Caddy to networks..."
 
     # Check if Caddy container exists
     if ! docker inspect "$CADDY_CONTAINER" >/dev/null 2>&1; then
@@ -162,26 +155,21 @@ connect_caddy_to_networks() {
         log_success "Connected Caddy to: $LOGGING_NETWORK"
     fi
 
-    # Connect to each project's networks (discovered by prefix)
-    for project in $PROJECTS; do
-        log_info "Finding networks for project: $project"
-
-        networks=$(find_project_networks "$project")
-
-        if [ -z "$networks" ]; then
-            log_warn "No networks found with prefix: ${project}-"
+    # Connect to each network listed in NETWORKS
+    for network in $NETWORKS; do
+        if ! network_exists "$network"; then
+            log_warn "Network not found: $network"
+            log_info "Make sure the project is running and network exists"
             continue
         fi
 
-        for network in $networks; do
-            if container_connected_to_network "$CADDY_CONTAINER" "$network"; then
-                log_success "Caddy connected to: $network"
-            else
-                log_info "Connecting Caddy to: $network"
-                docker network connect "$network" "$CADDY_CONTAINER"
-                log_success "Connected Caddy to: $network"
-            fi
-        done
+        if container_connected_to_network "$CADDY_CONTAINER" "$network"; then
+            log_success "Caddy connected to: $network"
+        else
+            log_info "Connecting Caddy to: $network"
+            docker network connect "$network" "$CADDY_CONTAINER"
+            log_success "Connected Caddy to: $network"
+        fi
     done
 }
 
@@ -210,26 +198,17 @@ show_summary() {
     echo ""
     echo "Networks connected:"
     echo "  - $LOGGING_NETWORK (logging infrastructure)"
-    for project in $PROJECTS; do
-        networks=$(find_project_networks "$project")
-        if [ -n "$networks" ]; then
-            for network in $networks; do
-                echo "  - $network"
-            done
+    for network in $NETWORKS; do
+        if network_exists "$network"; then
+            echo "  - $network"
         else
-            echo "  - (no networks found for $project)"
+            echo "  - $network (not found)"
         fi
     done
     echo ""
     echo "Next steps:"
-    echo "  1. Ensure .env is configured (copy from .env.example)"
-    echo "  2. Start services: docker compose up -d"
-    echo "  3. Access logs at: https://syslog.<project>.com"
-    echo ""
-    echo "For each project, ensure containers:"
-    echo "  - Are named: <project>-<service> (e.g., projecta-backend)"
-    echo "  - Have label: logging=true"
-    echo "  - Are on a network with prefix: <project>-"
+    echo "  1. Symlink project Caddy configs to caddy-projects/"
+    echo "  2. Reload Caddy: docker exec system-caddy caddy reload --config /etc/caddy/Caddyfile"
     echo ""
     echo "============================================================================="
 }
@@ -245,7 +224,7 @@ main() {
     echo ""
 
     validate_environment
-    load_projects
+    load_networks
     create_logging_network
     connect_caddy_to_networks
     reload_caddy
