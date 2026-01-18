@@ -246,7 +246,7 @@ setup_env_file() {
 # GRAFANA CONFIGURATION
 # =============================================================================
 GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+GRAFANA_ADMIN_PASSWORD='${GRAFANA_PASSWORD}'
 GRAFANA_ROOT_URL=https://syslog.${BASE_DOMAIN}
 
 # =============================================================================
@@ -254,7 +254,7 @@ GRAFANA_ROOT_URL=https://syslog.${BASE_DOMAIN}
 # =============================================================================
 # Username: admin
 # Password: (saved below - SAVE THIS SOMEWHERE SAFE!)
-CADDY_BASIC_AUTH_HASH=${CADDY_HASH}
+CADDY_BASIC_AUTH_HASH='${CADDY_HASH}'
 
 # =============================================================================
 # DOMAIN CONFIGURATION
