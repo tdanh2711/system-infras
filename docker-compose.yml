@@ -86,7 +86,7 @@ services:
   # PROMTAIL - Log Collection Agent
   # =============================================================================
   promtail:
-    image: grafana/promtail:2.9.0
+    image: grafana/promtail:latest
     container_name: system-promtail
     restart: unless-stopped
     volumes:
