@@ -260,6 +260,7 @@ CADDY_BASIC_AUTH_HASH='${CADDY_HASH}'
 # DOMAIN CONFIGURATION
 # =============================================================================
 BASE_DOMAIN=${BASE_DOMAIN}
+ADMIN_EMAIL=${ADMIN_EMAIL}
 
 # =============================================================================
 # LOGGING CONFIGURATION
@@ -389,8 +390,8 @@ setup_directories() {
     fi
 }
 
-update_caddyfile() {
-    log_step "Updating Caddyfile"
+validate_caddyfile() {
+    log_step "Validating Caddyfile"
 
     CADDYFILE="${SCRIPT_DIR}/Caddyfile"
 
@@ -399,25 +400,8 @@ update_caddyfile() {
         exit 1
     fi
 
-    # Read the admin email from .env or use default
-    if [ -f "$ENV_FILE" ]; then
-        # shellcheck disable=SC1090
-        . "$ENV_FILE"
-    fi
-
-    ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
-
-    # Update the email in Caddyfile
-    if grep -q "email admin@example.com" "$CADDYFILE"; then
-        sed -i.bak "s/email admin@example.com/email ${ADMIN_EMAIL}/" "$CADDYFILE" 2>/dev/null || \
-        sed -i '' "s/email admin@example.com/email ${ADMIN_EMAIL}/" "$CADDYFILE"
-        rm -f "${CADDYFILE}.bak"
-        log_success "Updated admin email in Caddyfile"
-    else
-        log_info "Admin email already configured or manually set"
-    fi
-
-    log_info "Remember to add/update domain blocks in Caddyfile for your projects"
+    log_success "Caddyfile found"
+    log_info "Admin email will be loaded from ADMIN_EMAIL in .env"
 }
 
 validate_setup() {
@@ -537,7 +521,7 @@ main() {
     setup_env_file
     setup_projects_file
     setup_directories
-    update_caddyfile
+    validate_caddyfile
     validate_setup
     show_next_steps
 }
