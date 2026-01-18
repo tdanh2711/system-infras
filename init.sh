@@ -231,9 +231,6 @@ setup_env_file() {
     echo ""
     ADMIN_EMAIL=$(prompt_input "Enter admin email for Let's Encrypt notifications" "admin@example.com")
 
-    # Get base domain
-    BASE_DOMAIN=$(prompt_input "Enter your base domain (e.g., example.com)" "example.com")
-
     # Create .env file
     cat > "$ENV_FILE" << EOF
 # =============================================================================
@@ -247,19 +244,15 @@ setup_env_file() {
 # =============================================================================
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD='${GRAFANA_PASSWORD}'
-GRAFANA_ROOT_URL=https://syslog.${BASE_DOMAIN}
 
 # =============================================================================
-# CADDY BASIC AUTH
+# CADDY CONFIGURATION
 # =============================================================================
 # Username: admin
 # Password: (saved below - SAVE THIS SOMEWHERE SAFE!)
 CADDY_BASIC_AUTH_HASH='${CADDY_HASH}'
 
-# =============================================================================
-# DOMAIN CONFIGURATION
-# =============================================================================
-BASE_DOMAIN=${BASE_DOMAIN}
+# Admin email for Let's Encrypt notifications
 ADMIN_EMAIL=${ADMIN_EMAIL}
 
 # =============================================================================
@@ -283,11 +276,10 @@ EOF
 # =============================================================================
 
 GRAFANA:
-  URL: https://syslog.${BASE_DOMAIN}
   Username: admin
   Password: ${GRAFANA_PASSWORD}
 
-CADDY BASIC AUTH:
+CADDY BASIC AUTH (for protected endpoints):
   Username: admin
   Password: ${CADDY_PASSWORD}
 
@@ -306,7 +298,6 @@ EOF
     printf "${BOLD}${RED}==============================================================================${NC}\n"
     echo ""
     printf "${BOLD}Grafana:${NC}\n"
-    printf "  URL:      https://syslog.%s\n" "$BASE_DOMAIN"
     printf "  Username: admin\n"
     printf "  Password: ${CYAN}%s${NC}\n" "$GRAFANA_PASSWORD"
     echo ""
