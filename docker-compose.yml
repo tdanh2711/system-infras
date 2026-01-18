@@ -19,6 +19,8 @@ services:
       - ./caddy/config:/config
     networks:
       - logging-net
+    env_file:
+      - .env
     environment:
       - CADDY_ADMIN=0.0.0.0:2019
     healthcheck:
