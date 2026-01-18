@@ -230,11 +230,12 @@ copy_caddy_files() {
         fi
     done
 
-    # Verify files in container
+    # Verify files in container (use sh -c to expand glob inside container)
     if container_running "$CADDY_CONTAINER"; then
         log_info "Verifying files in container..."
-        file_count=$(docker exec "$CADDY_CONTAINER" ls -1 /etc/caddy/projects/*.caddy 2>/dev/null | wc -l || echo "0")
-        if [ "$file_count" -gt 0 ]; then
+        file_count=$(docker exec "$CADDY_CONTAINER" sh -c 'ls -1 /etc/caddy/projects/*.caddy 2>/dev/null | wc -l')
+        file_count=$(echo "$file_count" | tr -d '[:space:]')
+        if [ "$file_count" -gt 0 ] 2>/dev/null; then
             log_success "Found $file_count .caddy file(s) in container"
         else
             log_warn "No .caddy files found in container at /etc/caddy/projects/"
