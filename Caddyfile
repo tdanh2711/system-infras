@@ -40,7 +40,8 @@
 # =============================================================================
 # Import all .caddy files from projects directory
 # Each project manages its own config file
-import /etc/caddy/projects/*.caddy?
+# Note: ? is a glob wildcard in Caddy, not "optional" modifier
+import /etc/caddy/projects/*.caddy
 
 # =============================================================================
 # OPTIONAL: Health check endpoint
