@@ -1,0 +1,133 @@
+// ============================================
+// DISCOVERY - Find all running Docker containers
+// ============================================
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+// ============================================
+// RELABEL - Extract labels from container metadata
+// ============================================
+discovery.relabel "docker_labels" {
+  targets = discovery.docker.containers.targets
+
+  // Only keep running containers
+  rule {
+    source_labels = ["__meta_docker_container_state"]
+    regex         = "running"
+    action        = "keep"
+  }
+
+  // Clean container name (remove leading /)
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+    replacement   = "$1"
+  }
+
+  // Extract project (first part before hyphen)
+  rule {
+    source_labels = ["container"]
+    regex         = "([a-zA-Z0-9]+)-.*"
+    target_label  = "project"
+    replacement   = "$1"
+  }
+
+  // Extract service (part after first hyphen)
+  rule {
+    source_labels = ["container"]
+    regex         = "[a-zA-Z0-9]+-(.+)"
+    target_label  = "service"
+    replacement   = "$1"
+  }
+
+  // Fallback: use container name as service if no hyphen
+  rule {
+    source_labels = ["container", "service"]
+    regex         = "(.+);"
+    target_label  = "service"
+    replacement   = "$1"
+  }
+
+  // Docker Compose metadata
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+}
+
+// ============================================
+// SOURCE - Collect Docker container logs
+// ============================================
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.docker_labels.rules
+  labels        = { "job" = "docker" }
+  forward_to    = [loki.process.docker_logs.receiver]
+}
+
+// ============================================
+// PROCESS - Parse and enrich log entries
+// ============================================
+loki.process "docker_logs" {
+  forward_to = [loki.write.loki.receiver]
+
+  // Try JSON parsing first
+  stage.json {
+    expressions = {
+      level     = "level",
+      msg       = "msg",
+      message   = "message",
+      time      = "time",
+      timestamp = "timestamp",
+    }
+  }
+
+  // Fallback: extract level from text logs
+  stage.regex {
+    expression = "(?P<level>DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL)"
+  }
+
+  // Normalize log level to lowercase
+  stage.template {
+    source   = "level"
+    template = "{{ ToLower .Value }}"
+  }
+
+  // Add level as label
+  stage.labels {
+    values = { "level" = "" }
+  }
+
+  // Parse timestamp
+  stage.timestamp {
+    source = "time"
+    format = "RFC3339"
+    fallback_formats = [
+      "RFC3339Nano",
+      "UnixMs",
+      "2006-01-02T15:04:05.000Z",
+      "2006-01-02 15:04:05",
+    ]
+  }
+}
+
+// ============================================
+// WRITE - Send logs to Loki
+// ============================================
+loki.write "loki" {
+  endpoint {
+    url = "http://system-loki:3100/loki/api/v1/push"
+  }
+  external_labels = {
+    source = "alloy",
+  }
+}
