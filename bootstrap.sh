@@ -196,17 +196,30 @@ copy_caddy_files() {
         return 0
     fi
 
-    # Copy each file
-    for file_path in $CADDY_FILES; do
+    # Copy each file (format: /path/to/file:destname)
+    for entry in $CADDY_FILES; do
+        # Parse path:name format
+        file_path="${entry%%:*}"
+        dest_name="${entry#*:}"
+
+        # If no colon found, entry equals both parts - use filename as dest
+        if [ "$file_path" = "$dest_name" ]; then
+            log_error "Invalid format: $entry (expected /path/to/file:name)"
+            log_info "Example: /root/project/Caddyfile.static:project.caddy"
+            continue
+        fi
+
         if [ ! -f "$file_path" ]; then
             log_warn "File not found: $file_path"
             continue
         fi
 
-        # Get filename and create destination name with .caddy extension
-        filename=$(basename "$file_path")
-        # Remove any existing extension and add .caddy
-        dest_name="${filename%.*}.caddy"
+        # Ensure .caddy extension
+        case "$dest_name" in
+            *.caddy) ;;
+            *) dest_name="${dest_name}.caddy" ;;
+        esac
+
         dest_path="${CADDY_PROJECTS_DIR}/${dest_name}"
 
         # Copy the file
@@ -216,6 +229,18 @@ copy_caddy_files() {
             log_error "Failed to copy: $file_path"
         fi
     done
+
+    # Verify files in container
+    if container_running "$CADDY_CONTAINER"; then
+        log_info "Verifying files in container..."
+        file_count=$(docker exec "$CADDY_CONTAINER" ls -1 /etc/caddy/projects/*.caddy 2>/dev/null | wc -l || echo "0")
+        if [ "$file_count" -gt 0 ]; then
+            log_success "Found $file_count .caddy file(s) in container"
+        else
+            log_warn "No .caddy files found in container at /etc/caddy/projects/"
+            log_info "Check if caddy-projects/ is mounted correctly in docker-compose.yml"
+        fi
+    fi
 }
 
 reload_caddy() {
@@ -253,9 +278,13 @@ show_summary() {
     echo ""
     if [ -n "$CADDY_FILES" ]; then
         echo "Caddy files copied to caddy-projects/:"
-        for file_path in $CADDY_FILES; do
-            filename=$(basename "$file_path")
-            dest_name="${filename%.*}.caddy"
+        for entry in $CADDY_FILES; do
+            file_path="${entry%%:*}"
+            dest_name="${entry#*:}"
+            case "$dest_name" in
+                *.caddy) ;;
+                *) dest_name="${dest_name}.caddy" ;;
+            esac
             if [ -f "$file_path" ]; then
                 echo "  - $dest_name (from $file_path)"
             else

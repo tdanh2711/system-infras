@@ -336,12 +336,12 @@ setup_caddy_env() {
     NETWORKS=$(prompt_input "Network names" "lcdvn-network")
 
     echo ""
-    log_info "Enter paths to Caddyfile configs to copy (space-separated, or leave empty)"
-    log_info "These files will be copied to caddy-projects/ on each bootstrap"
-    log_info "Example: /root/project1/Caddyfile.static /root/project2/Caddyfile.static"
+    log_info "Enter Caddyfile mappings (space-separated, or leave empty)"
+    log_info "Format: /path/to/file:name (auto-adds .caddy extension)"
+    log_info "Example: /root/lcdvn/Caddyfile.static:lcdvn /root/projectb/Caddyfile:projectb"
     echo ""
 
-    CADDY_FILES=$(prompt_input "Caddyfile paths" "")
+    CADDY_FILES=$(prompt_input "Caddyfile mappings" "")
 
     cat > "$CADDY_ENV_FILE" << EOF
 # =============================================================================
