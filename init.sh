@@ -101,10 +101,11 @@ prompt_input() {
     question="$1"
     default="$2"
 
+    # Print prompt to stderr so it shows when used in command substitution
     if [ -n "$default" ]; then
-        printf "${YELLOW}%s [%s]: ${NC}" "$question" "$default"
+        printf "${YELLOW}%s [%s]: ${NC}" "$question" "$default" >&2
     else
-        printf "${YELLOW}%s: ${NC}" "$question"
+        printf "${YELLOW}%s: ${NC}" "$question" >&2
     fi
 
     read -r answer
