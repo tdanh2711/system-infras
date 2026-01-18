@@ -102,8 +102,8 @@ validate_environment() {
 # =============================================================================
 # MAIN FUNCTIONS
 # =============================================================================
-load_networks() {
-    log_info "Loading networks from: $CADDY_ENV_FILE"
+load_caddy_env() {
+    log_info "Loading configuration from: $CADDY_ENV_FILE"
 
     # Source the caddy env file
     . "$CADDY_ENV_FILE"
@@ -114,6 +114,12 @@ load_networks() {
     fi
 
     log_success "Networks to connect: $NETWORKS"
+
+    if [ -n "$CADDY_FILES" ]; then
+        log_success "Caddy files to copy: $CADDY_FILES"
+    else
+        log_info "No CADDY_FILES configured"
+    fi
 }
 
 create_logging_network() {
@@ -173,6 +179,45 @@ connect_caddy_to_networks() {
     done
 }
 
+copy_caddy_files() {
+    log_info "Copying Caddy configuration files..."
+
+    CADDY_PROJECTS_DIR="${SCRIPT_DIR}/caddy-projects"
+
+    # Create caddy-projects directory if it doesn't exist
+    if [ ! -d "$CADDY_PROJECTS_DIR" ]; then
+        mkdir -p "$CADDY_PROJECTS_DIR"
+        log_success "Created directory: $CADDY_PROJECTS_DIR"
+    fi
+
+    # Skip if no files configured
+    if [ -z "$CADDY_FILES" ]; then
+        log_info "No Caddy files to copy"
+        return 0
+    fi
+
+    # Copy each file
+    for file_path in $CADDY_FILES; do
+        if [ ! -f "$file_path" ]; then
+            log_warn "File not found: $file_path"
+            continue
+        fi
+
+        # Get filename and create destination name with .caddy extension
+        filename=$(basename "$file_path")
+        # Remove any existing extension and add .caddy
+        dest_name="${filename%.*}.caddy"
+        dest_path="${CADDY_PROJECTS_DIR}/${dest_name}"
+
+        # Copy the file
+        if cp "$file_path" "$dest_path"; then
+            log_success "Copied: $file_path -> $dest_name"
+        else
+            log_error "Failed to copy: $file_path"
+        fi
+    done
+}
+
 reload_caddy() {
     log_info "Reloading Caddy configuration..."
 
@@ -206,9 +251,20 @@ show_summary() {
         fi
     done
     echo ""
-    echo "Next steps:"
-    echo "  1. Symlink project Caddy configs to caddy-projects/"
-    echo "  2. Reload Caddy: docker exec system-caddy caddy reload --config /etc/caddy/Caddyfile"
+    if [ -n "$CADDY_FILES" ]; then
+        echo "Caddy files copied to caddy-projects/:"
+        for file_path in $CADDY_FILES; do
+            filename=$(basename "$file_path")
+            dest_name="${filename%.*}.caddy"
+            if [ -f "$file_path" ]; then
+                echo "  - $dest_name (from $file_path)"
+            else
+                echo "  - $dest_name (source not found)"
+            fi
+        done
+        echo ""
+    fi
+    echo "Caddy configuration has been reloaded."
     echo ""
     echo "============================================================================="
 }
@@ -224,9 +280,10 @@ main() {
     echo ""
 
     validate_environment
-    load_networks
+    load_caddy_env
     create_logging_network
     connect_caddy_to_networks
+    copy_caddy_files
     reload_caddy
     show_summary
 }
