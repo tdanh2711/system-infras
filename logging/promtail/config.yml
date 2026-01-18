@@ -80,3 +80,7 @@ scrape_configs:
 
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
         target_label: compose_service
+
+      # ALWAYS ensure Loki has at least one label
+      - target_label: job
+        replacement: docker
