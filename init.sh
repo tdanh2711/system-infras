@@ -5,10 +5,10 @@
 # This script MUST be run before `docker compose up -d`
 #
 # It will:
-# 1. Check system requirements (Docker, permissions)
-# 2. Create .env and caddy.env from templates
-# 3. Generate secure passwords and bcrypt hashes
-# 4. Create required directories with correct ownership
+# 1. Check system requirements (Docker, jq/python3)
+# 2. Create .env with secure passwords
+# 3. Create config/settings.json and config/projects.json
+# 4. Create required directories
 # 5. Validate configuration
 #
 # Usage: ./init.sh
@@ -22,12 +22,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 ENV_EXAMPLE="${SCRIPT_DIR}/.env.example"
-CADDY_ENV_FILE="${SCRIPT_DIR}/caddy.env"
-CADDY_ENV_EXAMPLE="${SCRIPT_DIR}/caddy.env.example"
-
-# Directory ownership
-GRAFANA_UID=472
-LOKI_UID=10001
+CONFIG_DIR="${SCRIPT_DIR}/config"
+SETTINGS_FILE="${CONFIG_DIR}/settings.json"
+SETTINGS_EXAMPLE="${CONFIG_DIR}/settings.example.json"
+PROJECTS_FILE="${CONFIG_DIR}/projects.json"
+PROJECTS_EXAMPLE="${CONFIG_DIR}/projects.example.json"
 
 # Password length
 PASSWORD_LENGTH=32
@@ -101,7 +100,6 @@ prompt_input() {
     question="$1"
     default="$2"
 
-    # Print prompt to stderr so it shows when used in command substitution
     if [ -n "$default" ]; then
         printf "${YELLOW}%s [%s]: ${NC}" "$question" "$default" >&2
     else
@@ -120,8 +118,6 @@ prompt_input() {
 # Generate a random password
 generate_password() {
     length="${1:-$PASSWORD_LENGTH}"
-    # Use /dev/urandom for secure random generation
-    # Filter to alphanumeric + some special chars, avoid problematic ones
     LC_ALL=C tr -dc 'A-Za-z0-9!@#%^*_+-=' < /dev/urandom | head -c "$length" 2>/dev/null || \
     openssl rand -base64 "$length" 2>/dev/null | tr -dc 'A-Za-z0-9!@#%^*_+-=' | head -c "$length" || \
     date +%s%N | sha256sum | head -c "$length"
@@ -131,6 +127,23 @@ generate_password() {
 generate_bcrypt_hash() {
     password="$1"
     docker run --rm caddy:2-alpine caddy hash-password --plaintext "$password" 2>/dev/null
+}
+
+# Check if jq is available, fallback to python3
+has_json_tool() {
+    command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1
+}
+
+# Write JSON using jq or python3
+write_json() {
+    file="$1"
+    content="$2"
+
+    if command -v python3 >/dev/null 2>&1; then
+        echo "$content" | python3 -m json.tool > "$file"
+    else
+        echo "$content" > "$file"
+    fi
 }
 
 # =============================================================================
@@ -161,27 +174,18 @@ check_docker() {
     log_success "Docker Compose is available"
 }
 
-check_sudo() {
-    log_step "Checking Permissions"
+check_json_tool() {
+    log_step "Checking JSON tools"
 
-    # Check if we can use sudo (needed for chown)
-    if command -v sudo >/dev/null 2>&1; then
-        if sudo -n true 2>/dev/null; then
-            log_success "Sudo access available (passwordless)"
-            SUDO_CMD="sudo"
-        else
-            log_warn "Sudo requires password - you may be prompted"
-            SUDO_CMD="sudo"
-        fi
+    if command -v jq >/dev/null 2>&1; then
+        log_success "jq is available"
+    elif command -v python3 >/dev/null 2>&1; then
+        log_success "python3 is available (will use for JSON)"
     else
-        if [ "$(id -u)" = "0" ]; then
-            log_success "Running as root"
-            SUDO_CMD=""
-        else
-            log_warn "Not running as root and sudo not available"
-            log_warn "Directory ownership may not be set correctly"
-            SUDO_CMD=""
-        fi
+        log_error "Neither jq nor python3 is available"
+        log_info "Install jq: apt install jq / brew install jq"
+        log_info "Or install python3"
+        exit 1
     fi
 }
 
@@ -189,7 +193,7 @@ check_sudo() {
 # SETUP FUNCTIONS
 # =============================================================================
 setup_env_file() {
-    log_step "Setting up .env file"
+    log_step "Setting up .env file (secrets only)"
 
     if [ -f "$ENV_FILE" ]; then
         log_warn ".env file already exists"
@@ -202,20 +206,22 @@ setup_env_file() {
         fi
     fi
 
-    if [ ! -f "$ENV_EXAMPLE" ]; then
-        log_error ".env.example not found"
-        exit 1
-    fi
+    # Ask for admin email
+    ADMIN_EMAIL=$(prompt_input "Enter admin email for Let's Encrypt notifications" "admin@example.com")
 
-    log_info "Generating secure passwords..."
-
-    # Generate Grafana password
-    GRAFANA_PASSWORD=$(generate_password)
-    log_success "Generated Grafana admin password"
+    log_info "Generating secure password for Caddy basic auth..."
 
     # Generate Caddy basic auth password
     CADDY_PASSWORD=$(generate_password)
     log_success "Generated Caddy basic auth password"
+
+    # Generate Seq admin password
+    SEQ_ADMIN_PASSWORD=$(generate_password)
+    log_success "Generated Seq admin password"
+
+    # Generate Seq API key
+    SEQ_API_KEY=$(generate_password)
+    log_success "Generated Seq API key"
 
     # Generate bcrypt hash for Caddy
     log_info "Generating bcrypt hash (this may take a moment)..."
@@ -227,43 +233,31 @@ setup_env_file() {
     fi
     log_success "Generated bcrypt hash"
 
-    # Get admin email for Caddy/Let's Encrypt
-    echo ""
-    ADMIN_EMAIL=$(prompt_input "Enter admin email for Let's Encrypt notifications" "admin@example.com")
-
     # Create .env file
     cat > "$ENV_FILE" << EOF
 # =============================================================================
-# SYSTEM-INFRAS ENVIRONMENT CONFIGURATION
+# SYSTEM-INFRAS SECRETS
 # =============================================================================
 # Generated by init.sh on $(date)
 # NEVER commit this file to version control
 
-# =============================================================================
-# GRAFANA CONFIGURATION
-# =============================================================================
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD='${GRAFANA_PASSWORD}'
-
-# =============================================================================
-# CADDY CONFIGURATION
-# =============================================================================
-# Username: admin
-# Password: (saved below - SAVE THIS SOMEWHERE SAFE!)
-CADDY_BASIC_AUTH_HASH='${CADDY_HASH}'
-
-# Admin email for Let's Encrypt notifications
+# Admin email for Let's Encrypt certificate notifications
 ADMIN_EMAIL=${ADMIN_EMAIL}
 
-# =============================================================================
-# LOGGING CONFIGURATION
-# =============================================================================
-LOKI_RETENTION_HOURS=336
+# Caddy basic auth password hash
+# Username: admin
+CADDY_BASIC_AUTH_HASH='${CADDY_HASH}'
+
+# Seq admin password
+SEQ_ADMIN_PASSWORD=${SEQ_ADMIN_PASSWORD}
+
+# Seq API key (for Vector ingestion)
+SEQ_API_KEY=${SEQ_API_KEY}
 EOF
 
     log_success "Created .env file"
 
-    # Save passwords to a separate file for user reference
+    # Save password to credentials file
     CREDS_FILE="${SCRIPT_DIR}/.credentials"
     cat > "$CREDS_FILE" << EOF
 # =============================================================================
@@ -272,38 +266,37 @@ EOF
 # Generated on $(date)
 #
 # IMPORTANT: Save these credentials somewhere safe, then DELETE this file!
-# This file should NOT be kept on the server long-term.
 # =============================================================================
-
-GRAFANA:
-  Username: admin
-  Password: ${GRAFANA_PASSWORD}
 
 CADDY BASIC AUTH (for protected endpoints):
   Username: admin
   Password: ${CADDY_PASSWORD}
 
-# =============================================================================
-# After saving these credentials, delete this file:
+SEQ:
+  Username: admin
+  Password: ${SEQ_ADMIN_PASSWORD}
+  API Key: ${SEQ_API_KEY}
+
+# After saving, delete this file:
 #   rm ${CREDS_FILE}
 # =============================================================================
 EOF
 
     chmod 600 "$CREDS_FILE"
-    log_success "Saved credentials to .credentials file"
 
     echo ""
     printf "${BOLD}${RED}==============================================================================${NC}\n"
     printf "${BOLD}${RED}                        IMPORTANT - SAVE THESE CREDENTIALS${NC}\n"
     printf "${BOLD}${RED}==============================================================================${NC}\n"
     echo ""
-    printf "${BOLD}Grafana:${NC}\n"
-    printf "  Username: admin\n"
-    printf "  Password: ${CYAN}%s${NC}\n" "$GRAFANA_PASSWORD"
-    echo ""
     printf "${BOLD}Caddy Basic Auth:${NC}\n"
     printf "  Username: admin\n"
     printf "  Password: ${CYAN}%s${NC}\n" "$CADDY_PASSWORD"
+    echo ""
+    printf "${BOLD}Seq:${NC}\n"
+    printf "  Username: admin\n"
+    printf "  Password: ${CYAN}%s${NC}\n" "$SEQ_ADMIN_PASSWORD"
+    printf "  API Key:  ${CYAN}%s${NC}\n" "$SEQ_API_KEY"
     echo ""
     printf "${YELLOW}Credentials also saved to: .credentials${NC}\n"
     printf "${YELLOW}DELETE .credentials after saving passwords elsewhere!${NC}\n"
@@ -311,8 +304,50 @@ EOF
     echo ""
 }
 
+setup_settings_json() {
+    log_step "Setting up config/settings.json"
+
+    # Create config directory if not exists
+    mkdir -p "$CONFIG_DIR"
+
+    if [ -f "$SETTINGS_FILE" ]; then
+        log_warn "config/settings.json already exists"
+        if ! prompt_yes_no "Overwrite existing settings?" "n"; then
+            log_info "Keeping existing settings.json"
+            return 0
+        fi
+    fi
+
+    echo ""
+    ADMIN_EMAIL=$(prompt_input "Enter admin email for Let's Encrypt notifications" "admin@example.com")
+    RETENTION_DAYS=$(prompt_input "Log retention in days" "15")
+    LOGS_SUBDOMAIN=$(prompt_input "Subdomain for logs UI" "syslog")
+
+    # Validate retention days is a number
+    if ! echo "$RETENTION_DAYS" | grep -qE '^[0-9]+$'; then
+        log_warn "Invalid retention days, using default: 15"
+        RETENTION_DAYS=15
+    fi
+
+    # Create settings.json
+    SETTINGS_CONTENT=$(cat << EOF
+{
+  "adminEmail": "${ADMIN_EMAIL}",
+  "seq": {
+    "retentionDays": ${RETENTION_DAYS}
+  },
+  "caddy": {
+    "logsSubdomain": "${LOGS_SUBDOMAIN}"
+  }
+}
+EOF
+)
+
+    write_json "$SETTINGS_FILE" "$SETTINGS_CONTENT"
+    log_success "Created config/settings.json"
+}
+
 # Validate domain (reject subdomains)
-# Returns 0 if valid domain, 1 if subdomain
 validate_domain() {
     domain="$1"
 
@@ -325,13 +360,11 @@ validate_domain() {
         *.co.uk|*.org.uk|*.ac.uk|\
         *.com.au|*.net.au|*.org.au|\
         *.co.jp|*.or.jp|*.ne.jp)
-            # Allow up to 2 dots for two-part TLDs (e.g., example.com.vn)
             if [ "$dot_count" -gt 2 ]; then
                 return 1
             fi
             ;;
         *)
-            # Standard TLDs: allow only 1 dot (e.g., example.com)
             if [ "$dot_count" -gt 1 ]; then
                 return 1
             fi
@@ -341,7 +374,6 @@ validate_domain() {
     return 0
 }
 
-# Prompt for domain with validation
 prompt_domain() {
     while true; do
         domain=$(prompt_input "Project domain (e.g., example.com)" "")
@@ -353,7 +385,7 @@ prompt_domain() {
 
         if ! validate_domain "$domain"; then
             log_error "Invalid: '$domain' appears to be a subdomain"
-            log_info "Please enter the main domain only (e.g., example.com, not app.example.com)"
+            log_info "Please enter the main domain only (e.g., example.com)"
             continue
         fi
 
@@ -362,23 +394,19 @@ prompt_domain() {
     done
 }
 
-setup_caddy_env() {
-    log_step "Setting up caddy.env file (Project Configuration)"
+setup_projects_json() {
+    log_step "Setting up config/projects.json"
 
-    if [ -f "$CADDY_ENV_FILE" ]; then
-        log_warn "caddy.env file already exists"
-        if ! prompt_yes_no "Overwrite existing caddy.env file?" "n"; then
-            log_info "Keeping existing caddy.env file"
+    if [ -f "$PROJECTS_FILE" ]; then
+        log_warn "config/projects.json already exists"
+        if ! prompt_yes_no "Overwrite existing projects?" "n"; then
+            log_info "Keeping existing projects.json"
             return 0
         fi
     fi
 
-    if [ ! -f "$CADDY_ENV_EXAMPLE" ]; then
-        log_error "caddy.env.example not found"
-        exit 1
-    fi
-
-    PROJECTS=""
+    PROJECTS_JSON='{"projects":['
+    first_project=true
     project_count=0
 
     echo ""
@@ -390,14 +418,15 @@ setup_caddy_env() {
         project_count=$((project_count + 1))
         printf "\n${BOLD}--- Project #%d ---${NC}\n" "$project_count" >&2
 
-        # Ask for domain (required)
+        # Ask for domain
         domain=$(prompt_domain)
 
-        # Ask for network (required)
-        network=$(prompt_input "Docker network name" "${domain%.*}-network")
+        # Ask for network
+        default_network="${domain%.*}-network"
+        network=$(prompt_input "Docker network name" "$default_network")
         while [ -z "$network" ]; do
             log_error "Network name is required"
-            network=$(prompt_input "Docker network name" "${domain%.*}-network")
+            network=$(prompt_input "Docker network name" "$default_network")
         done
 
         # Ask for caddyfile (optional)
@@ -405,18 +434,17 @@ setup_caddy_env() {
         log_info "Caddyfile path is optional. Leave empty if project has no custom Caddy config."
         caddyfile=$(prompt_input "Caddyfile path (optional)" "")
 
-        # Build project entry: domain:network[:caddyfile]
-        if [ -n "$caddyfile" ]; then
-            project_entry="${domain}:${network}:${caddyfile}"
+        # Build project JSON
+        if [ "$first_project" = true ]; then
+            first_project=false
         else
-            project_entry="${domain}:${network}"
+            PROJECTS_JSON="${PROJECTS_JSON},"
         fi
 
-        # Add to projects list
-        if [ -z "$PROJECTS" ]; then
-            PROJECTS="$project_entry"
+        if [ -n "$caddyfile" ]; then
+            PROJECTS_JSON="${PROJECTS_JSON}{\"domain\":\"${domain}\",\"network\":\"${network}\",\"caddyfile\":\"${caddyfile}\"}"
         else
-            PROJECTS="$PROJECTS $project_entry"
+            PROJECTS_JSON="${PROJECTS_JSON}{\"domain\":\"${domain}\",\"network\":\"${network}\"}"
         fi
 
         log_success "Added project: $domain"
@@ -427,18 +455,10 @@ setup_caddy_env() {
         fi
     done
 
-    cat > "$CADDY_ENV_FILE" << EOF
-# =============================================================================
-# CADDY PROJECT CONFIGURATION
-# =============================================================================
-# Generated by init.sh on $(date)
-#
-# Format: domain:network[:caddyfile_path]
+    PROJECTS_JSON="${PROJECTS_JSON}]}"
 
-PROJECTS="${PROJECTS}"
-EOF
-
-    log_success "Created caddy.env with $project_count project(s)"
+    write_json "$PROJECTS_FILE" "$PROJECTS_JSON"
+    log_success "Created config/projects.json with $project_count project(s)"
 }
 
 setup_directories() {
@@ -449,29 +469,18 @@ setup_directories() {
     mkdir -p "${SCRIPT_DIR}/caddy/config"
     log_success "Created caddy/data and caddy/config"
 
-    # Create Grafana directory
-    mkdir -p "${SCRIPT_DIR}/logging/grafana/data"
-    log_success "Created logging/grafana/data"
+    # Create Seq directory
+    mkdir -p "${SCRIPT_DIR}/logging/seq/data"
+    log_success "Created logging/seq/data"
 
-    # Create Loki directory
-    mkdir -p "${SCRIPT_DIR}/logging/loki/data"
-    log_success "Created logging/loki/data"
+    # Create Vector directory (config already exists from earlier)
+    mkdir -p "${SCRIPT_DIR}/logging/vector"
+    mkdir -p "${SCRIPT_DIR}/logging/vector/data"
+    log_success "Created logging/vector and logging/vector/data"
 
-    # Set ownership
-    log_info "Setting directory ownership..."
-
-    if [ -n "$SUDO_CMD" ]; then
-        $SUDO_CMD chown -R ${GRAFANA_UID}:${GRAFANA_UID} "${SCRIPT_DIR}/logging/grafana/data"
-        log_success "Set Grafana data ownership (UID ${GRAFANA_UID})"
-
-        $SUDO_CMD chown -R ${LOKI_UID}:${LOKI_UID} "${SCRIPT_DIR}/logging/loki/data"
-        log_success "Set Loki data ownership (UID ${LOKI_UID})"
-    else
-        log_warn "Could not set directory ownership - services may fail to start"
-        log_info "Run manually:"
-        log_info "  sudo chown -R ${GRAFANA_UID}:${GRAFANA_UID} logging/grafana/data"
-        log_info "  sudo chown -R ${LOKI_UID}:${LOKI_UID} logging/loki/data"
-    fi
+    # Create caddy-projects directory
+    mkdir -p "${SCRIPT_DIR}/caddy-projects"
+    log_success "Created caddy-projects"
 }
 
 validate_caddyfile() {
@@ -485,7 +494,6 @@ validate_caddyfile() {
     fi
 
     log_success "Caddyfile found"
-    log_info "Admin email will be loaded from ADMIN_EMAIL in .env"
 }
 
 validate_setup() {
@@ -493,26 +501,35 @@ validate_setup() {
 
     errors=0
 
-    # Check .env exists and has required vars
+    # Check .env exists
     if [ ! -f "$ENV_FILE" ]; then
         log_error ".env file not found"
         errors=$((errors + 1))
     else
         # shellcheck disable=SC1090
         . "$ENV_FILE"
-        if [ -z "$GRAFANA_ADMIN_PASSWORD" ]; then
-            log_error "GRAFANA_ADMIN_PASSWORD not set in .env"
-            errors=$((errors + 1))
-        fi
         if [ -z "$CADDY_BASIC_AUTH_HASH" ]; then
             log_error "CADDY_BASIC_AUTH_HASH not set in .env"
             errors=$((errors + 1))
         fi
+        if [ -z "$SEQ_ADMIN_PASSWORD" ]; then
+            log_error "SEQ_ADMIN_PASSWORD not set in .env"
+            errors=$((errors + 1))
+        fi
+        if [ -z "$SEQ_API_KEY" ]; then
+            log_error "SEQ_API_KEY not set in .env"
+            errors=$((errors + 1))
+        fi
     fi
 
-    # Check caddy.env
-    if [ ! -f "$CADDY_ENV_FILE" ]; then
-        log_error "caddy.env file not found"
+    # Check config files
+    if [ ! -f "$SETTINGS_FILE" ]; then
+        log_error "config/settings.json not found"
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$PROJECTS_FILE" ]; then
+        log_error "config/projects.json not found"
         errors=$((errors + 1))
     fi
 
@@ -522,19 +539,20 @@ validate_setup() {
         errors=$((errors + 1))
     fi
 
-    if [ ! -d "${SCRIPT_DIR}/logging/grafana/data" ]; then
-        log_error "logging/grafana/data directory not found"
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -d "${SCRIPT_DIR}/logging/loki/data" ]; then
-        log_error "logging/loki/data directory not found"
+    if [ ! -d "${SCRIPT_DIR}/logging/seq/data" ]; then
+        log_error "logging/seq/data directory not found"
         errors=$((errors + 1))
     fi
 
     # Check docker-compose.yml
     if [ ! -f "${SCRIPT_DIR}/docker-compose.yml" ]; then
         log_error "docker-compose.yml not found"
+        errors=$((errors + 1))
+    fi
+
+    # Check vector.toml
+    if [ ! -f "${SCRIPT_DIR}/logging/vector/vector.toml" ]; then
+        log_error "logging/vector/vector.toml not found"
         errors=$((errors + 1))
     fi
 
@@ -581,7 +599,7 @@ main() {
     printf "${BOLD}${CYAN}==============================================================================${NC}\n"
     echo ""
     printf "This script will set up everything needed to run system-infras.\n"
-    printf "It will generate secure passwords and create required directories.\n"
+    printf "Stack: Caddy (reverse proxy) + Seq (log server) + Vector (log collector)\n"
     echo ""
 
     if ! prompt_yes_no "Continue with initialization?" "y"; then
@@ -590,9 +608,10 @@ main() {
     fi
 
     check_docker
-    check_sudo
+    check_json_tool
     setup_env_file
-    setup_caddy_env
+    setup_settings_json
+    setup_projects_json
     setup_directories
     validate_caddyfile
     validate_setup

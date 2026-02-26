@@ -1,0 +1,9 @@
+{
+  "adminEmail": "admin@example.com",
+  "seq": {
+    "retentionDays": 15
+  },
+  "caddy": {
+    "logsSubdomain": "syslog"
+  }
+}

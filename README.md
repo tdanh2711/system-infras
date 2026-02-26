@@ -5,11 +5,11 @@ A production-ready, reusable infrastructure platform for multi-project Docker se
 ## Features
 
 - **Caddy Reverse Proxy**: Automatic HTTPS, HTTP/3 support, per-project subdomains
-- **Centralized Logging**: Grafana + Loki + Promtail stack
+- **Centralized Logging**: Seq + Vector stack
 - **Multi-Project Isolation**: Separate Docker networks per project, shared infrastructure
 - **Per-Project Log Access**: Each project gets its own `syslog.<project>.com` subdomain
-- **Automatic Container Discovery**: Promtail auto-discovers containers and extracts labels
-- **Pre-built Dashboards**: Project logs and cron job monitoring dashboards included
+- **Automatic Container Discovery**: Vector auto-discovers containers and extracts labels
+- **Powerful Log Querying**: Seq provides a modern UI for searching and analyzing logs
 
 ## Architecture
 
@@ -24,22 +24,23 @@ Internet
 └─────┬───────┘
       │
       ▼
-┌─────────────┐      ┌─────────────┐
-│  Grafana    │ ◄──► │    Loki     │
-│ (Dashboard) │      │ (Log Store) │
-└─────────────┘      └──────┬──────┘
-                            │
-                            ▲
-                     ┌──────┴──────┐
-                     │  Promtail   │
-                     │(Log Collect)│
-                     └──────┬──────┘
-                            │
-                            ▼
-              ┌─────────────────────────────┐
-              │     Docker Containers       │
-              │ (projecta-backend, etc.)       │
-              └─────────────────────────────┘
+┌─────────────┐
+│    Seq      │ ◄── Port 80 (Log Server & UI)
+│ (Log Store  │
+│  + Query UI)│
+└──────┬──────┘
+       │
+       ▲
+┌──────┴──────┐
+│   Vector    │
+│(Log Collect)│
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│     Docker Containers       │
+│ (projecta-backend, etc.)     │
+└─────────────────────────────┘
 ```
 
 ## Quick Start
@@ -67,10 +68,10 @@ chmod +x init.sh
 The `init.sh` script will:
 
 1. **Check system requirements** - Verify Docker is installed and running
-2. **Generate secure passwords** - Create strong 32-character passwords for Grafana and Caddy
+2. **Generate secure passwords** - Create strong 32-character passwords for Seq and Caddy
 3. **Generate bcrypt hash** - Create the password hash for Caddy basic auth
 4. **Create .env file** - Configure all environment variables automatically
-5. **Create projects.env** - Set up your project list (you'll be prompted to enter project names)
+5. **Create config/projects.json** - Set up your project list
 6. **Create directories** - Set up all required directories with correct ownership
 7. **Display credentials** - Show generated passwords (save them securely!)
 
@@ -81,7 +82,7 @@ After running, you'll see output like:
                         IMPORTANT - SAVE THESE CREDENTIALS
 ==============================================================================
 
-Grafana:
+Seq:
   URL:      https://syslog.example.com
   Username: admin
   Password: <generated-password>
@@ -120,7 +121,7 @@ syslog.yourproject.com {
 
     header_up X-Project "yourproject"
 
-    reverse_proxy system-grafana:3000 {
+    reverse_proxy system-seq:80 {
         header_up X-Project "yourproject"
     }
 
@@ -170,27 +171,27 @@ rm .credentials
 | Task | Manual Equivalent |
 |------|-------------------|
 | Check Docker | `docker info` |
-| Generate Grafana password | `openssl rand -base64 32` |
+| Generate Seq password | `openssl rand -base64 32` |
 | Generate Caddy password | `openssl rand -base64 32` |
 | Generate bcrypt hash | `docker run --rm caddy:2-alpine caddy hash-password` |
 | Create .env | `cp .env.example .env && nano .env` |
-| Create projects.env | `cp projects.env.example projects.env && nano projects.env` |
-| Create directories | `mkdir -p caddy/data caddy/config logging/grafana/data logging/loki/data` |
-| Set Grafana ownership | `sudo chown -R 472:472 logging/grafana/data` |
-| Set Loki ownership | `sudo chown -R 10001:10001 logging/loki/data` |
+| Create config/projects.json | `cp config/projects.example.json config/projects.json && nano config/projects.json` |
+| Create directories | `mkdir -p caddy/data caddy/config logging/seq/data` |
 
 ---
 
 ## Adding a New Project
 
-### Step 1: Update projects.env
+### Step 1: Update config/projects.json
 
 ```bash
-# Edit projects.env
-nano projects.env
+# Edit projects.json
+nano config/projects.json
 
 # Add your new project
-PROJECTS="projecta projectb newproject"
+{
+  "projects": ["projecta", "projectb", "newproject"]
+}
 ```
 
 ### Step 2: Add Caddyfile Block
@@ -203,7 +204,7 @@ syslog.newproject.com {
 
     header_up X-Project "newproject"
 
-    reverse_proxy system-grafana:3000 {
+    reverse_proxy system-seq:80 {
         header_up X-Project "newproject"
     }
 
@@ -267,7 +268,7 @@ Examples:
 - `projectb-api`
 - `projectb-worker`
 
-Promtail extracts:
+Vector extracts:
 - `project`: Everything before the first hyphen
 - `service`: Everything after the first hyphen
 - `container`: Full container name
@@ -276,48 +277,43 @@ Promtail extracts:
 
 ## Accessing Logs
 
-### Via Grafana Dashboard
+### Via Seq UI
 
 1. Go to `https://syslog.<project>.com`
 2. Enter basic auth credentials
-3. Navigate to **Dashboards > System > Project Logs**
-4. Use the Project/Service/Level dropdowns to filter
+3. Use the search bar to query logs
 
-### Via Grafana Explore
+### Query Examples
 
-1. Go to `https://syslog.<project>.com/explore`
-2. Select **Loki** datasource
-3. Use LogQL queries:
-
-```logql
+```
 # All logs for a project
-{project="projecta"}
+project=projecta
 
 # Errors only
-{project="projecta"} | level="error"
+project=projecta AND level=error
 
 # Specific service
-{project="projecta", service="backend"}
+project=projecta AND service=backend
 
 # Search content
-{project="projecta"} |= "error"
+project=projecta AND "error"
 
-# Regex search
-{project="projecta"} |~ "user_id=[0-9]+"
+# Time range filter
+project=projecta AND @t > -24h
 ```
 
 ---
 
 ## Password Management
 
-### Rotate Grafana Password
+### Rotate Seq Password
 
 ```bash
 # Update .env
-nano .env  # Change GRAFANA_ADMIN_PASSWORD
+nano .env  # Change SEQ_ADMIN_PASSWORD
 
-# Restart Grafana
-docker compose restart grafana
+# Restart Seq
+docker compose restart seq
 ```
 
 ### Rotate Caddy Basic Auth Password
@@ -351,24 +347,21 @@ docker compose ps
 # Caddy
 docker exec system-caddy caddy version
 
-# Grafana
-curl -s http://localhost:3000/api/health
+# Seq
+curl -s http://localhost:80/health
 
-# Loki
-curl -s http://localhost:3100/ready
-
-# Promtail
-curl -s http://localhost:9080/ready
+# Vector
+docker exec system-vector vector validate --no-environment
 ```
 
 ### Check Logs are Flowing
 
 ```bash
-# Query Loki directly
-curl -s "http://localhost:3100/loki/api/v1/labels" | jq
+# Check Vector logs
+docker logs system-vector
 
-# Check for recent logs
-curl -s "http://localhost:3100/loki/api/v1/query?query={job=~\".+\"}" | jq
+# Check Seq is receiving logs
+# Visit https://syslog.<project>.com and check for incoming logs
 ```
 
 ---
@@ -383,20 +376,14 @@ curl -s "http://localhost:3100/loki/api/v1/query?query={job=~\".+\"}" | jq
    # Should show: projectname-servicename
    ```
 
-2. **Check logging label**:
+2. **Check Vector**:
    ```bash
-   docker inspect <container> | jq '.[0].Config.Labels'
-   # Should include: "logging": "true"
+   docker logs system-vector
    ```
 
-3. **Check Promtail**:
+3. **Check Seq**:
    ```bash
-   docker logs system-promtail
-   ```
-
-4. **Check Loki**:
-   ```bash
-   docker logs system-loki
+   docker logs system-seq
    ```
 
 ### Caddy Certificate Issues
@@ -410,26 +397,6 @@ docker exec system-caddy caddy validate --config /etc/caddy/Caddyfile
 
 # Force certificate renewal
 docker exec system-caddy caddy reload --config /etc/caddy/Caddyfile
-```
-
-### Grafana Won't Start
-
-```bash
-# Check permissions
-ls -la logging/grafana/data
-
-# Fix ownership (Grafana runs as UID 472)
-sudo chown -R 472:472 logging/grafana/data
-```
-
-### Loki Won't Start
-
-```bash
-# Check permissions
-ls -la logging/loki/data
-
-# Fix ownership (Loki runs as UID 10001)
-sudo chown -R 10001:10001 logging/loki/data
 ```
 
 ### Network Issues
@@ -448,12 +415,10 @@ docker inspect system-caddy --format '{{range $net, $conf := .NetworkSettings.Ne
 ### High Disk Usage
 
 ```bash
-# Check Loki data size
-du -sh logging/loki/data
+# Check Seq data size
+du -sh logging/seq/data
 
-# Retention is set to 14 days by default
-# To force compaction, restart Loki
-docker compose restart loki
+# Configure retention in Seq settings UI
 ```
 
 ---
@@ -464,26 +429,23 @@ docker compose restart loki
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GRAFANA_ADMIN_USER` | Grafana admin username | `admin` |
-| `GRAFANA_ADMIN_PASSWORD` | Grafana admin password | Generated by init.sh |
-| `GRAFANA_ROOT_URL` | Public URL for Grafana | `https://syslog.<domain>` |
+| `SEQ_ADMIN_PASSWORD` | Seq admin password | Generated by init.sh |
+| `SEQ_API_KEY` | API key for remote log ingestion | (empty) |
 | `CADDY_BASIC_AUTH_HASH` | Bcrypt hash for basic auth | Generated by init.sh |
-| `LOKI_RETENTION_HOURS` | Log retention in hours | `336` (14 days) |
 
-### projects.env
+### config/projects.json
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `PROJECTS` | Space-separated list of project names | `"projecta projectb"` |
+| Field | Description | Example |
+|-------|-------------|---------|
+| `projects` | Array of project names | `["projecta", "projectb"]` |
 
 ### Ports
 
 | Service | Internal Port | Exposed Port |
 |---------|---------------|--------------|
 | Caddy | 80, 443 | 80, 443 |
-| Grafana | 3000 | Not exposed |
-| Loki | 3100 | Not exposed |
-| Promtail | 9080 | Not exposed |
+| Seq | 80 | Not exposed |
+| Vector | 9000 | Not exposed |
 
 ---
 
@@ -497,35 +459,28 @@ system-infras/
 ├── .env                    # Environment variables (gitignored)
 ├── .env.example            # Environment template
 ├── .credentials            # Generated credentials (DELETE after saving!)
-├── projects.env            # Project list (gitignored)
-├── projects.env.example    # Projects template
+├── config/
+│   ├── settings.json       # System settings (gitignored)
+│   ├── settings.example.json
+│   ├── projects.json       # Project list (gitignored)
+│   └── projects.example.json
 ├── Caddyfile               # Caddy configuration
 ├── caddy/
 │   ├── data/               # Certificates (gitignored)
 │   └── config/             # Caddy config (gitignored)
-└── logging/
-    ├── loki/
-    │   ├── config.yml      # Loki configuration
-    │   └── data/           # Loki data (gitignored)
-    ├── promtail/
-    │   └── config.yml      # Promtail configuration
-    └── grafana/
-        ├── data/           # Grafana data (gitignored)
-        └── provisioning/
-            ├── datasources/
-            │   └── loki.yml
-            └── dashboards/
-                ├── default.yml
-                └── json/
-                    ├── project-logs.json
-                    └── cron-monitoring.json
+├── caddy-projects/         # Per-project Caddy configs
+├── logging/
+│   ├── seq/
+│   │   └── data/           # Seq data (gitignored)
+│   └── vector/
+│       └── vector.toml     # Vector configuration
 ```
 
 ---
 
 ## Security Considerations
 
-1. **Never commit `.env`, `projects.env`, or `.credentials`** - Contains secrets
+1. **Never commit `.env`, `config/projects.json`, or `.credentials`** - Contains secrets
 2. **Delete `.credentials` after saving passwords** - Don't leave it on the server
 3. **Use strong passwords** - init.sh generates 32-character passwords automatically
 4. **Rotate credentials regularly** - At least quarterly
@@ -547,11 +502,8 @@ docker compose up -d
 ### Backup
 
 ```bash
-# Backup Grafana dashboards and settings
-tar -czf grafana-backup.tar.gz logging/grafana/data
-
-# Backup Loki data (if needed)
-tar -czf loki-backup.tar.gz logging/loki/data
+# Backup Seq data
+tar -czf seq-backup.tar.gz logging/seq/data
 ```
 
 ### View Disk Usage

@@ -7,13 +7,13 @@
 # Rename this file to remove .disabled suffix to activate it.
 # =============================================================================
 
-# Logging dashboard for your project
+# Seq log viewer for your project
 syslog.yourproject.com {
     import basic_auth
 
     header_up X-Project "yourproject"
 
-    reverse_proxy system-grafana:3000 {
+    reverse_proxy system-seq:80 {
         header_up X-Project "yourproject"
     }
 

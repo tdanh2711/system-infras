@@ -1,0 +1,182 @@
+# =============================================================================
+# VECTOR CONFIGURATION
+# =============================================================================
+# Collects Docker container logs and forwards them to Seq
+# Documentation: https://vector.dev/docs/
+
+# =============================================================================
+# SOURCES
+# =============================================================================
+[sources.docker_logs]
+type = "docker_logs"
+docker_host = "unix:///var/run/docker.sock"
+
+# Exclude system containers from collection
+exclude_containers = ["system-vector", "system-caddy", "system-seq"]
+
+# =============================================================================
+# HTTP SOURCE FOR CADDY LOGS
+# =============================================================================
+# Receives structured logs from Caddy syslog endpoints
+[sources.http_logs]
+type = "http"
+address = "0.0.0.0:9000"
+
+# Add project field to identify source
+[sources.http_logs.headers]
+project = "caddy"
+
+# =============================================================================
+# TRANSFORMS
+# =============================================================================
+[transforms.parse_logs]
+type = "remap"
+inputs = ["docker_logs"]
+source = '''
+# Extract project and service from container name
+# Format: {project}-{service} or {project}-{service}-{instance}
+# IMPORTANT: Project name should NOT contain hyphens!
+# Example: myproject-backend -> project=myproject, service=backend
+# Example: myproject-cron-worker -> project=myproject, service=cron-worker
+
+container = string!(.container_name)
+
+# Remove leading slash if present
+if starts_with(container, "/") {
+    container = slice!(container, 1)
+}
+
+# Split by hyphen
+parts = split(container, "-") ?? []
+
+# First part is project
+.project = get(parts, [0]) ?? "unknown"
+
+# Rest is service (joined back with hyphens)
+if length(parts) > 1 {
+    service_parts = slice!(parts, 1)
+    .service = join(service_parts, "-") ?? "unknown"
+} else {
+    .service = "default"
+}
+
+# Try to parse JSON logs
+if is_string(.message) {
+    parsed, err = parse_json(.message)
+    if err == null {
+        # Merge parsed fields into root
+        .msg = parsed.msg ?? parsed.message ?? .message
+        .level = parsed.level ?? parsed.severity ?? "info"
+        .timestamp = parsed.timestamp ?? parsed.time ?? parsed.ts ?? now()
+
+        # Keep original message as raw if we parsed successfully
+        .raw_message = .message
+        .message = .msg
+
+        # Merge any additional fields (use conditional deletion to avoid errors)
+        if exists(parsed.msg) { del(parsed.msg) }
+        if exists(parsed.message) { del(parsed.message) }
+        if exists(parsed.level) { del(parsed.level) }
+        if exists(parsed.severity) { del(parsed.severity) }
+        if exists(parsed.timestamp) { del(parsed.timestamp) }
+        if exists(parsed.time) { del(parsed.time) }
+        if exists(parsed.ts) { del(parsed.ts) }
+        . = merge(., parsed)
+    }
+}
+
+# Normalize log level to lowercase
+.level = downcase(string(.level) ?? "info") ?? "info"
+
+# Map common level names
+if .level == "warning" {
+    .level = "warn"
+} else if .level == "fatal" || .level == "critical" {
+    .level = "error"
+} else if .level == "trace" {
+    .level = "debug"
+}
+
+# Add source identifier
+.source = "vector"
+'''
+
+# Transform for HTTP logs from Caddy
+[transforms.parse_http_logs]
+type = "remap"
+inputs = ["http_logs"]
+source = '''
+# HTTP logs already have container_name from Caddy
+# Just ensure consistent field names
+
+.container_name = .container_name ?? "http-log"
+
+# Try to parse JSON body
+if is_string(.body) {
+    parsed, err = parse_json(.body)
+    if err == null {
+        .message = parsed.message ?? parsed.msg ?? .body
+        .level = parsed.level ?? parsed.severity ?? "info"
+        .timestamp = parsed.timestamp ?? parsed.time ?? now()
+        
+        # Merge additional fields (use conditional deletion to avoid errors)
+        if exists(parsed.message) { del(parsed.message) }
+        if exists(parsed.msg) { del(parsed.msg) }
+        if exists(parsed.level) { del(parsed.level) }
+        if exists(parsed.severity) { del(parsed.severity) }
+        if exists(parsed.timestamp) { del(parsed.timestamp) }
+        if exists(parsed.time) { del(parsed.time) }
+        . = merge(., parsed)
+    }
+}
+
+# Normalize log level
+.level = downcase(string(.level) ?? "info") ?? "info"
+
+# Map common level names
+if .level == "warning" {
+    .level = "warn"
+} else if .level == "fatal" || .level == "critical" {
+    .level = "error"
+} else if .level == "trace" {
+    .level = "debug"
+}
+
+# Add source identifier
+.source = "http"
+'''
+
+# =============================================================================
+# SINKS
+# =============================================================================
+[sinks.seq]
+type = "http"
+inputs = ["parse_logs", "parse_http_logs"]
+uri = "http://system-seq:5341/api/events/raw"
+method = "post"
+
+# Seq API key authentication
+auth.headers.Content-Type = "application/json"
+auth.headers.X-Seq-ApiKey = "${SEQ_API_KEY}"
+
+# Encoding for Seq CLEF format
+encoding.codec = "json"
+
+# Batch settings for better performance
+batch.max_bytes = 1048576
+batch.timeout_secs = 1
+
+# Buffer settings - use disk buffer for reliability
+buffer.type = "disk"
+buffer.max_events = 10000
+buffer.max_size = 104857600  # 100MB
+buffer.when_full = "block"
+buffer.path = "/vector/data/buffer"
+
+# Request settings with retry
+request.concurrency = 10
+request.rate_limit_num = 100
+request.retry_attempts = 5
+request.retry_initial_backoff_secs = 1
+request.retry_max_duration_secs = 60
+request.timeout_secs = 30

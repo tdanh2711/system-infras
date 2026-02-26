@@ -1,0 +1,9 @@
+{
+  "projects": [
+    {
+      "domain": "example.com",
+      "network": "example-network",
+      "caddyfile": "/optional/path/to/Caddyfile"
+    }
+  ]
+}

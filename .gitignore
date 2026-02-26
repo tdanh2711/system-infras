@@ -4,21 +4,21 @@
 
 # Environment files (contain secrets)
 .env
-projects.env
 .credentials
+
+# JSON config files (contain project-specific settings)
+config/settings.json
+config/projects.json
 
 # Caddy data (certificates, etc.)
 caddy/data/
 caddy/config/
 
-# Grafana data
-logging/grafana/data/
+# Seq data
+logging/seq/data/
 
-# Loki data
-logging/loki/data/
-
-# Promtail positions
-logging/promtail/positions.yaml
+# Vector buffer data
+logging/vector/data/
 
 # Log files
 *.log
@@ -38,3 +38,4 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+backups/
