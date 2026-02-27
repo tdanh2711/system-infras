@@ -24,20 +24,22 @@ transforms:
     type: remap
     inputs: ["docker_logs"]
     source: |
-      # 1. Tách project/service (split không lỗi nên không dùng ??)
+      # 1. Tách project/service
       container = string!(.container_name)
       if starts_with(container, "/") { container = slice!(container, 1) }
       
       parts = split(container, "-")
-      .project = get(parts, [0]) || "unknown"
+      # Sửa lỗi E103: get() có thể trả về error nếu index sai
+      .project = get(parts, [0]) ?? "unknown"
       
       if length(parts) > 1 {
-          .service = join(slice!(parts, 1), "-")
+          # Sửa lỗi E103: slice và join đều có thể fail
+          .service = join(slice(parts, 1) ?? [], "-") ?? "unknown"
       } else {
           .service = "default"
       }
 
-      # 2. Parse JSON (Sử dụng || cho null coalescing thay vì ?? cho error)
+      # 2. Try to parse JSON
       if is_string(.message) {
           parsed, err = parse_json(.message)
           if err == null {
@@ -47,13 +49,16 @@ transforms:
               
               del(parsed.msg); del(parsed.message); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time); del(parsed.ts)
-              . = merge(., parsed)
+              
+              # Sửa lỗi E103: Sử dụng merge! để ép buộc gán object
+              merge!(., parsed)
               .message = .msg
           }
       }
 
-      # 3. Normalize Level (Sửa lỗi cú pháp else if)
-      .level = downcase(to_string(.level) || "info")
+      # 3. Normalize Level
+      # Sửa lỗi E630: Xử lý lỗi của to_string trước khi đưa vào downcase
+      .level = downcase(to_string(.level) ?? "info")
       if .level == "warning" {
           .level = "warn"
       } else if .level == "fatal" || .level == "critical" {
@@ -62,7 +67,7 @@ transforms:
           .level = "debug"
       }
 
-      # 4. Map to CLEF
+      # 4. Map to SEQ CLEF
       .@t = .timestamp
       .@m = .message
       .@l = .level
@@ -87,10 +92,10 @@ transforms:
               .timestamp = parsed.timestamp || parsed.time || .timestamp
               del(parsed.message); del(parsed.msg); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time)
-              . = merge(., parsed)
+              merge!(., parsed)
           }
       }
-      .level = downcase(to_string(.level) || "info")
+      .level = downcase(to_string(.level) ?? "info")
       .@t = .timestamp
       .@m = .message
       .@l = .level
@@ -108,7 +113,6 @@ sinks:
     method: post
     encoding:
       codec: json
-
     request:
       headers:
         X-Seq-ApiKey: "${SEQ_API_KEY}"
@@ -118,13 +122,10 @@ sinks:
       retry_initial_backoff_secs: 1
       retry_max_duration_secs: 60
       timeout_secs: 30
-
     batch:
       max_bytes: 1048576
       timeout_secs: 1
-
     buffer:
       type: disk
-      # Bắt buộc >= 268435488 bytes (256 MiB) cho v0.41.0
-      max_size: 268435488 
+      max_size: 268435488 # 256 MiB (Mức tối thiểu bắt buộc của v0.41.0)
       when_full: block
