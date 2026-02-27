@@ -177,8 +177,8 @@ generate_syslog_config() {
 ${subdomain}.${domain} {
     import basic_auth
 
-    # Forward to Vector HTTP source (port 9000)
-    reverse_proxy system-vector:9000
+    # Forward to Seq HTTP source (port 80)
+    reverse_proxy system-seq:80
 
     log {
         output file /data/logs/access-${domain}.log {
