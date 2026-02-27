@@ -90,7 +90,7 @@ transforms:
           }
       }
       .level = downcase(to_string(.level) ?? "info")
-      .@t = to_string!(.timestamp)
+      .@t = format_timestamp!(.timestamp, "%Y-%m-%dT%H:%M:%SZ")
       .@m = .message
       .@l = .level
       del(.timestamp); del(.message); del(.level); del(.body)
