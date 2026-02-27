@@ -9,66 +9,32 @@ sources:
   http_logs:
     type: http
     address: 0.0.0.0:9000
-    headers:
-      project: caddy
+
 transforms:
   parse_logs:
     type: remap
     inputs:
       - docker_logs
-    source: >
-      # Extract project and service from container name
-
-      # Format: {project}-{service} or {project}-{service}-{instance}
-
-      # IMPORTANT: Project name should NOT contain hyphens!
-
-      # Example: myproject-backend -> project=myproject, service=backend
-
-      # Example: myproject-cron-worker -> project=myproject, service=cron-worker
-
-
+    source: |
+      # 1. Tách project/service
       container = string!(.container_name)
-
-
-      # Remove leading slash if present
-
-      if starts_with(container, "/") {
-          container = slice!(container, 1)
-      }
-
-
-      # Split by hyphen
-
+      if starts_with(container, "/") { container = slice!(container, 1) }
       parts = split(container, "-") ?? []
-
-
-      # First part is project
-
       .project = get(parts, [0]) ?? "unknown"
-
-
-      # Rest is service (joined back with hyphens)
-
       if length(parts) > 1 {
-          service_parts = slice!(parts, 1)
-          .service = join(service_parts, "-") ?? "unknown"
+          .service = join(slice!(parts, 1), "-") ?? "unknown"
       } else {
           .service = "default"
       }
 
-
-      # 2. Try to parse JSON logs
-
+      # 2. Parse JSON
       if is_string(.message) {
           parsed, err = parse_json(.message)
           if err == null {
-              # Merge parsed fields into root
               .msg = parsed.msg ?? parsed.message ?? .message
               .level = parsed.level ?? parsed.severity ?? "info"
               .timestamp = parsed.timestamp ?? parsed.time ?? parsed.ts ?? .timestamp
               
-              # Merge additional fields, removing core fields from the map
               del(parsed.msg); del(parsed.message); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time); del(parsed.ts)
               . = merge(., parsed)
@@ -76,82 +42,56 @@ transforms:
           }
       }
 
-
-      # 3. Normalize log level
-
+      # 3. Normalize Level
       .level = downcase(string(.level) ?? "info") ?? "info"
-
       if .level == "warning" { .level = "warn" }
-
       else if .level == "fatal" || .level == "critical" { .level = "error" }
 
-      else if .level == "trace" { .level = "debug" }
-
-
-      # 4. MAP TO SEQ CLEF FORMAT (IMPORTANT)
-
+      # 4. Map to CLEF
       .@t = .timestamp
-
       .@m = .message
-
       .@l = .level
-
       .@i = .container_id
 
-
-      # Cleanup redundant fields
-
       del(.timestamp); del(.message); del(.level); del(.msg); del(.container_id); del(.container_name)
-
       .source = "docker"
+
   parse_http_logs:
     type: remap
     inputs:
       - http_logs
     source: |
-      # HTTP logs already have container_name from Caddy
-      # Just ensure consistent field names
-
       .container_name = .container_name ?? "http-log"
-
-      # Try to parse JSON body
       if is_string(.body) {
           parsed, err = parse_json(.body)
           if err == null {
               .message = parsed.message ?? parsed.msg ?? .body
               .level = parsed.level ?? parsed.severity ?? "info"
               .timestamp = parsed.timestamp ?? parsed.time ?? .timestamp
-              
               del(parsed.message); del(parsed.msg); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time)
               . = merge(., parsed)
           }
       }
-
-      # Normalize log level
       .level = downcase(string(.level) ?? "info") ?? "info"
-      if .level == "warning" { .level = "warn" }
-      else if .level == "fatal" || .level == "critical" { .level = "error" }
-
-      # MAP TO SEQ CLEF FORMAT
       .@t = .timestamp
       .@m = .message
       .@l = .level
-
       del(.timestamp); del(.message); del(.level); del(.body)
       .source = "http"
+
 sinks:
   seq:
     type: http
     inputs:
       - parse_logs
       - parse_http_logs
-    uri: http://system-seq:80/api/events/raw?clef
+    uri: "http://system-seq:80/api/events/raw?clef"
     method: post
     auth:
       headers:
         Content-Type: application/json
-        X-Seq-ApiKey: ${SEQ_API_KEY}
+        X-Seq-ApiKey: "${SEQ_API_KEY}"
     encoding:
       codec: json
     batch:
@@ -159,7 +99,6 @@ sinks:
       timeout_secs: 1
     buffer:
       type: disk
-      max_events: 10000
       max_size: 104857600
       when_full: block
       path: /vector/data/buffer
