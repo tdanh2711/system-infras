@@ -55,8 +55,13 @@ transforms:
       }
 
       .level = downcase(to_string(.level) ?? "info")
-      if .level == "warning" { .level = "warn" }
-      else if .level == "fatal" || .level == "critical" { .level = "error" }
+      if .level == "warning" {
+          .level = "warn"
+      } else if .level == "fatal" || .level == "critical" {
+          .level = "error"
+      } else if .level == "trace" {
+          .level = "debug"
+      }
 
       # SỬA LỖI 400: Ép kiểu timestamp thành string theo chuẩn ISO 8601
       .@t = to_string!(.timestamp)
