@@ -1,45 +1,49 @@
 # =============================================================================
 # GLOBAL CONFIGURATION
 # =============================================================================
-# Nơi Vector lưu trữ dữ liệu đệm (buffer) và các checkpoint
 data_dir: "/vector/data"
 
+# =============================================================================
+# SOURCES
+# =============================================================================
 sources:
   docker_logs:
     type: docker_logs
     docker_host: unix:///var/run/docker.sock
-    exclude_containers:
-      - system-vector
-      - system-caddy
-      - system-seq
+    exclude_containers: ["system-vector", "system-caddy", "system-seq"]
+
   http_logs:
     type: http
     address: 0.0.0.0:9000
 
+# =============================================================================
+# TRANSFORMS
+# =============================================================================
 transforms:
   parse_logs:
     type: remap
-    inputs:
-      - docker_logs
+    inputs: ["docker_logs"]
     source: |
-      # 1. Tách project/service
+      # 1. Tách project/service (split không lỗi nên không dùng ??)
       container = string!(.container_name)
       if starts_with(container, "/") { container = slice!(container, 1) }
-      parts = split(container, "-") ?? []
-      .project = get(parts, [0]) ?? "unknown"
+      
+      parts = split(container, "-")
+      .project = get(parts, [0]) || "unknown"
+      
       if length(parts) > 1 {
-          .service = join(slice!(parts, 1), "-") ?? "unknown"
+          .service = join(slice!(parts, 1), "-")
       } else {
           .service = "default"
       }
 
-      # 2. Parse JSON
+      # 2. Parse JSON (Sử dụng || cho null coalescing thay vì ?? cho error)
       if is_string(.message) {
           parsed, err = parse_json(.message)
           if err == null {
-              .msg = parsed.msg ?? parsed.message ?? .message
-              .level = parsed.level ?? parsed.severity ?? "info"
-              .timestamp = parsed.timestamp ?? parsed.time ?? parsed.ts ?? .timestamp
+              .msg = parsed.msg || parsed.message || .message
+              .level = parsed.level || parsed.severity || "info"
+              .timestamp = parsed.timestamp || parsed.time || parsed.ts || .timestamp
               
               del(parsed.msg); del(parsed.message); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time); del(parsed.ts)
@@ -48,10 +52,15 @@ transforms:
           }
       }
 
-      # 3. Normalize Level
-      .level = downcase(string(.level) ?? "info") ?? "info"
-      if .level == "warning" { .level = "warn" }
-      else if .level == "fatal" || .level == "critical" { .level = "error" }
+      # 3. Normalize Level (Sửa lỗi cú pháp else if)
+      .level = downcase(to_string(.level) || "info")
+      if .level == "warning" {
+          .level = "warn"
+      } else if .level == "fatal" || .level == "critical" {
+          .level = "error"
+      } else if .level == "trace" {
+          .level = "debug"
+      }
 
       # 4. Map to CLEF
       .@t = .timestamp
@@ -64,48 +73,44 @@ transforms:
 
   parse_http_logs:
     type: remap
-    inputs:
-      - http_logs
+    inputs: ["http_logs"]
     source: |
-      .container_name = .container_name ?? "http-log"
+      .project = "caddy"
+      .service = "proxy"
+      .container_name = .container_name || "http-log"
+      
       if is_string(.body) {
           parsed, err = parse_json(.body)
           if err == null {
-              .message = parsed.message ?? parsed.msg ?? .body
-              .level = parsed.level ?? parsed.severity ?? "info"
-              .timestamp = parsed.timestamp ?? parsed.time ?? .timestamp
+              .message = parsed.message || parsed.msg || .body
+              .level = parsed.level || parsed.severity || "info"
+              .timestamp = parsed.timestamp || parsed.time || .timestamp
               del(parsed.message); del(parsed.msg); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time)
               . = merge(., parsed)
           }
       }
-      .level = downcase(string(.level) ?? "info") ?? "info"
+      .level = downcase(to_string(.level) || "info")
       .@t = .timestamp
       .@m = .message
       .@l = .level
       del(.timestamp); del(.message); del(.level); del(.body)
       .source = "http"
 
+# =============================================================================
+# SINKS
+# =============================================================================
 sinks:
   seq:
     type: http
-    inputs:
-      - parse_logs
-      - parse_http_logs
+    inputs: ["parse_logs", "parse_http_logs"]
     uri: "http://system-seq:80/api/events/raw?clef"
     method: post
     encoding:
       codec: json
-    batch:
-      max_bytes: 1048576
-      timeout_secs: 1
-    buffer:
-      type: disk
-      max_size: 104857600
-      when_full: block
+
     request:
       headers:
-        Content-Type: application/json
         X-Seq-ApiKey: "${SEQ_API_KEY}"
       concurrency: 10
       rate_limit_num: 100
@@ -113,3 +118,13 @@ sinks:
       retry_initial_backoff_secs: 1
       retry_max_duration_secs: 60
       timeout_secs: 30
+
+    batch:
+      max_bytes: 1048576
+      timeout_secs: 1
+
+    buffer:
+      type: disk
+      # Bắt buộc >= 268435488 bytes (256 MiB) cho v0.41.0
+      max_size: 268435488 
+      when_full: block
