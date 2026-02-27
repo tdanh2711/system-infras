@@ -88,10 +88,6 @@ sinks:
       - parse_http_logs
     uri: "http://system-seq:80/api/events/raw?clef"
     method: post
-    auth:
-      headers:
-        Content-Type: application/json
-        X-Seq-ApiKey: "${SEQ_API_KEY}"
     encoding:
       codec: json
     batch:
@@ -103,6 +99,9 @@ sinks:
       when_full: block
       path: /vector/data/buffer
     request:
+      headers:
+        Content-Type: application/json
+        X-Seq-ApiKey: "${SEQ_API_KEY}"
       concurrency: 10
       rate_limit_num: 100
       retry_attempts: 5
