@@ -60,48 +60,40 @@ if length(parts) > 1 {
     .service = "default"
 }
 
-# Try to parse JSON logs
+# 2. Try to parse JSON logs
 if is_string(.message) {
     parsed, err = parse_json(.message)
     if err == null {
         # Merge parsed fields into root
         .msg = parsed.msg ?? parsed.message ?? .message
         .level = parsed.level ?? parsed.severity ?? "info"
-        .timestamp = parsed.timestamp ?? parsed.time ?? parsed.ts ?? now()
-
-        # Keep original message as raw if we parsed successfully
-        .raw_message = .message
-        .message = .msg
-
-        # Merge any additional fields (use conditional deletion to avoid errors)
-        if exists(parsed.msg) { del(parsed.msg) }
-        if exists(parsed.message) { del(parsed.message) }
-        if exists(parsed.level) { del(parsed.level) }
-        if exists(parsed.severity) { del(parsed.severity) }
-        if exists(parsed.timestamp) { del(parsed.timestamp) }
-        if exists(parsed.time) { del(parsed.time) }
-        if exists(parsed.ts) { del(parsed.ts) }
+        .timestamp = parsed.timestamp ?? parsed.time ?? parsed.ts ?? .timestamp
+        
+        # Merge additional fields, removing core fields from the map
+        del(parsed.msg); del(parsed.message); del(parsed.level)
+        del(parsed.severity); del(parsed.timestamp); del(parsed.time); del(parsed.ts)
         . = merge(., parsed)
+        .message = .msg
     }
 }
 
-# Normalize log level to lowercase
+# 3. Normalize log level
 .level = downcase(string(.level) ?? "info") ?? "info"
+if .level == "warning" { .level = "warn" }
+else if .level == "fatal" || .level == "critical" { .level = "error" }
+else if .level == "trace" { .level = "debug" }
 
-# Map common level names
-if .level == "warning" {
-    .level = "warn"
-} else if .level == "fatal" || .level == "critical" {
-    .level = "error"
-} else if .level == "trace" {
-    .level = "debug"
-}
+# 4. MAP TO SEQ CLEF FORMAT (IMPORTANT)
+.@t = .timestamp
+.@m = .message
+.@l = .level
+.@i = .container_id
 
-# Add source identifier
-.source = "vector"
+# Cleanup redundant fields
+del(.timestamp); del(.message); del(.level); del(.msg); del(.container_id); del(.container_name)
+.source = "docker"
 '''
 
-# Transform for HTTP logs from Caddy
 [transforms.parse_http_logs]
 type = "remap"
 inputs = ["http_logs"]
@@ -117,32 +109,25 @@ if is_string(.body) {
     if err == null {
         .message = parsed.message ?? parsed.msg ?? .body
         .level = parsed.level ?? parsed.severity ?? "info"
-        .timestamp = parsed.timestamp ?? parsed.time ?? now()
+        .timestamp = parsed.timestamp ?? parsed.time ?? .timestamp
         
-        # Merge additional fields (use conditional deletion to avoid errors)
-        if exists(parsed.message) { del(parsed.message) }
-        if exists(parsed.msg) { del(parsed.msg) }
-        if exists(parsed.level) { del(parsed.level) }
-        if exists(parsed.severity) { del(parsed.severity) }
-        if exists(parsed.timestamp) { del(parsed.timestamp) }
-        if exists(parsed.time) { del(parsed.time) }
+        del(parsed.message); del(parsed.msg); del(parsed.level)
+        del(parsed.severity); del(parsed.timestamp); del(parsed.time)
         . = merge(., parsed)
     }
 }
 
 # Normalize log level
 .level = downcase(string(.level) ?? "info") ?? "info"
+if .level == "warning" { .level = "warn" }
+else if .level == "fatal" || .level == "critical" { .level = "error" }
 
-# Map common level names
-if .level == "warning" {
-    .level = "warn"
-} else if .level == "fatal" || .level == "critical" {
-    .level = "error"
-} else if .level == "trace" {
-    .level = "debug"
-}
+# MAP TO SEQ CLEF FORMAT
+.@t = .timestamp
+.@m = .message
+.@l = .level
 
-# Add source identifier
+del(.timestamp); del(.message); del(.level); del(.body)
 .source = "http"
 '''
 
@@ -152,7 +137,8 @@ if .level == "warning" {
 [sinks.seq]
 type = "http"
 inputs = ["parse_logs", "parse_http_logs"]
-uri = "http://system-seq:5341/api/events/raw"
+# Thêm ?clef vào cuối URI
+uri = "http://system-seq:80/api/events/raw?clef"
 method = "post"
 
 # Seq API key authentication
