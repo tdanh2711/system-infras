@@ -29,11 +29,9 @@ transforms:
       if starts_with(container, "/") { container = slice!(container, 1) }
       
       parts = split(container, "-")
-      # Sửa lỗi E103: get() có thể trả về error nếu index sai
       .project = get(parts, [0]) ?? "unknown"
       
       if length(parts) > 1 {
-          # Sửa lỗi E103: slice và join đều có thể fail
           .service = join(slice(parts, 1) ?? [], "-") ?? "unknown"
       } else {
           .service = "default"
@@ -50,25 +48,18 @@ transforms:
               del(parsed.msg); del(parsed.message); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time); del(parsed.ts)
               
-              # Sửa lỗi E103: Sử dụng merge! để ép buộc gán object
-              merge!(., parsed)
+              # SỬA LỖI WARNING: Phải gán kết quả merge vào root (.)
+              . = merge!(., parsed)
               .message = .msg
           }
       }
 
-      # 3. Normalize Level
-      # Sửa lỗi E630: Xử lý lỗi của to_string trước khi đưa vào downcase
       .level = downcase(to_string(.level) ?? "info")
-      if .level == "warning" {
-          .level = "warn"
-      } else if .level == "fatal" || .level == "critical" {
-          .level = "error"
-      } else if .level == "trace" {
-          .level = "debug"
-      }
+      if .level == "warning" { .level = "warn" }
+      else if .level == "fatal" || .level == "critical" { .level = "error" }
 
-      # 4. Map to SEQ CLEF
-      .@t = .timestamp
+      # SỬA LỖI 400: Ép kiểu timestamp thành string theo chuẩn ISO 8601
+      .@t = to_string!(.timestamp)
       .@m = .message
       .@l = .level
       .@i = .container_id
@@ -82,8 +73,6 @@ transforms:
     source: |
       .project = "caddy"
       .service = "proxy"
-      .container_name = .container_name || "http-log"
-      
       if is_string(.body) {
           parsed, err = parse_json(.body)
           if err == null {
@@ -92,11 +81,11 @@ transforms:
               .timestamp = parsed.timestamp || parsed.time || .timestamp
               del(parsed.message); del(parsed.msg); del(parsed.level)
               del(parsed.severity); del(parsed.timestamp); del(parsed.time)
-              merge!(., parsed)
+              . = merge!(., parsed)
           }
       }
       .level = downcase(to_string(.level) ?? "info")
-      .@t = .timestamp
+      .@t = to_string!(.timestamp)
       .@m = .message
       .@l = .level
       del(.timestamp); del(.message); del(.level); del(.body)
@@ -111,8 +100,9 @@ sinks:
     inputs: ["parse_logs", "parse_http_logs"]
     uri: "http://system-seq:80/api/events/raw?clef"
     method: post
+    # ĐỔI THÀNH NDJSON: Seq xử lý hàng loạt tốt nhất với định dạng này
     encoding:
-      codec: json
+      codec: ndjson
     request:
       headers:
         X-Seq-ApiKey: "${SEQ_API_KEY}"
@@ -127,5 +117,5 @@ sinks:
       timeout_secs: 1
     buffer:
       type: disk
-      max_size: 268435488 # 256 MiB (Mức tối thiểu bắt buộc của v0.41.0)
+      max_size: 268435488
       when_full: block
