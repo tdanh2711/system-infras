@@ -102,7 +102,7 @@ sinks:
     method: post
     # ĐỔI THÀNH NDJSON: Seq xử lý hàng loạt tốt nhất với định dạng này
     encoding:
-      codec: ndjson
+      codec: json
     request:
       headers:
         X-Seq-ApiKey: "${SEQ_API_KEY}"
