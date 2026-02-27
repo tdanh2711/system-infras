@@ -62,9 +62,8 @@ services:
     image: timberio/vector:0.41.0-alpine
     container_name: system-vector
     restart: unless-stopped
-    command: ["--config", "/etc/vector/vector.toml"]
     volumes:
-      - ./logging/vector/vector.toml:/etc/vector/vector.toml:ro
+      - ./logging/vector/vector.yaml:/etc/vector/vector.yaml:ro
       - ./logging/vector/data:/vector/data:rw
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
