@@ -1,3 +1,9 @@
+# =============================================================================
+# GLOBAL CONFIGURATION
+# =============================================================================
+# Nơi Vector lưu trữ dữ liệu đệm (buffer) và các checkpoint
+data_dir: "/vector/data"
+
 sources:
   docker_logs:
     type: docker_logs
@@ -97,7 +103,6 @@ sinks:
       type: disk
       max_size: 104857600
       when_full: block
-      path: /vector/data/buffer
     request:
       headers:
         Content-Type: application/json
