@@ -302,7 +302,7 @@ seq_login() {
         curlimages/curl:8.5.0 \
         curl -i -s \
         -X POST \
-        http://system-seq:80/api/authentication/login \
+        http://system-seq:80/api/users/login \
         -H "Content-Type: application/json" \
         -d "{\"Username\":\"$username\",\"Password\":\"$password\"}")
 
