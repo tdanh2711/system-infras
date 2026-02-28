@@ -249,6 +249,10 @@ validate_environment() {
 # SEQ SECURITY FUNCTIONS
 # =============================================================================
 
+# =============================================================================
+# SEQ API WRAPPER (DOCKER CURL)
+# =============================================================================
+
 seq_api_call() {
 
     method="$1"
@@ -267,10 +271,13 @@ seq_api_call() {
         ${data:+-d "$data"}
 }
 
+# =============================================================================
+# AUTH CHECK
+# =============================================================================
+
 seq_auth_enabled() {
 
-    response=$(seq_api_call "GET" "/api/apikeys" "" "")
-
+    response=$(seq_api_call "GET" "/api" "" "")
     status=$(echo "$response" | tail -n1)
 
     if [ "$status" = "401" ]; then
@@ -280,31 +287,46 @@ seq_auth_enabled() {
     fi
 }
 
-create_admin_api_key() {
+# =============================================================================
+# LOGIN (WHEN AUTH ENABLED)
+# =============================================================================
 
-    response=$(seq_api_call "POST" "/api/apikeys" \
-        '{"Title":"admin-key"}')
+seq_login() {
 
-    body=$(echo "$response" | sed '$d')
-    status=$(echo "$response" | tail -n1)
+    username="$1"
+    password="$2"
 
-    if [ "$status" != "201" ] && [ "$status" != "200" ]; then
-        log_error "Failed to create admin key (HTTP $status)"
-        echo "$body"
+    response=$(docker run --rm \
+        --network "$LOGGING_NETWORK" \
+        curlimages/curl:8.5.0 \
+        curl -i -s \
+        -X POST \
+        http://system-seq:80/api/authentication/login \
+        -H "Content-Type: application/json" \
+        -d "{\"Username\":\"$username\",\"Password\":\"$password\"}")
+
+    cookie=$(echo "$response" | grep -i "Set-Cookie" | awk '{print $2}' | cut -d';' -f1)
+
+    if [ -z "$cookie" ]; then
+        log_error "Login failed"
         return 1
     fi
 
-    echo "$body" | jq -r '.Token'
+    echo "$cookie"
 }
+
+# =============================================================================
+# CREATE PROJECT API KEY (ATTACH PROJECT PROPERTY)
+# =============================================================================
 
 create_project_api_key() {
 
     project="$1"
-    admin_key="$2"
+    auth_header="$2"
 
     response=$(seq_api_call "POST" "/api/apikeys" \
         "{\"Title\":\"${project}-key\",\"Properties\":{\"project\":\"${project}\"}}" \
-        "-H X-Seq-ApiKey:$admin_key")
+        "$auth_header")
 
     body=$(echo "$response" | sed '$d')
     status=$(echo "$response" | tail -n1)
@@ -318,35 +340,39 @@ create_project_api_key() {
     echo "$body" | jq -r '.Token'
 }
 
+# =============================================================================
+# GET API KEY ID BY TOKEN (FOR DELETE)
+# =============================================================================
+
 get_api_key_id_by_token() {
 
     token="$1"
-    admin_key="$2"
+    auth_header="$2"
 
-    response=$(seq_api_call "GET" "/api/apikeys" "" \
-        "-H X-Seq-ApiKey:$admin_key")
-
+    response=$(seq_api_call "GET" "/api/apikeys" "" "$auth_header")
     body=$(echo "$response" | sed '$d')
 
     echo "$body" | jq -r \
         ".[] | select(.Token==\"$token\") | .Id"
 }
 
+# =============================================================================
+# DELETE API KEY
+# =============================================================================
+
 delete_api_key() {
 
     token="$1"
-    admin_key="$2"
+    auth_header="$2"
 
-    id=$(get_api_key_id_by_token "$token" "$admin_key")
+    id=$(get_api_key_id_by_token "$token" "$auth_header")
 
     if [ -z "$id" ] || [ "$id" = "null" ]; then
         log_warn "Could not find API key id for token"
         return
     fi
 
-    response=$(seq_api_call "DELETE" "/api/apikeys/$id" "" \
-        "-H X-Seq-ApiKey:$admin_key")
-
+    response=$(seq_api_call "DELETE" "/api/apikeys/$id" "" "$auth_header")
     status=$(echo "$response" | tail -n1)
 
     if [ "$status" != "200" ] && [ "$status" != "204" ]; then
@@ -373,59 +399,62 @@ load_configuration() {
     log_success "Loaded $PROJECT_COUNT project(s)"
 }
 
+# =============================================================================
+# BOOTSTRAP / SYNC SEQ SECURITY
+# =============================================================================
+
 bootstrap_seq_security() {
 
     log_info "Bootstrapping / Syncing Seq security..."
 
-    # -----------------------------
-    # LOAD OR CREATE ADMIN KEY
-    # -----------------------------
-    if [ -f "$SEQ_SECRETS_FILE" ]; then
-        admin_key=$(jq -r '.adminApiKey' "$SEQ_SECRETS_FILE")
-        log_info "Loaded existing admin API key"
-    else
-        if seq_auth_enabled; then
-            log_error "Seq already secured but no secrets file found."
-            exit 1
+    auth_header=""
+
+    # -------------------------------------------------
+    # CHECK AUTH MODE
+    # -------------------------------------------------
+    if seq_auth_enabled; then
+
+        log_info "Seq authentication is enabled"
+
+        admin_user=$(jq -r '.adminUsername // empty' "$SEQ_SECRETS_FILE" 2>/dev/null)
+        admin_pass=$(jq -r '.adminPassword // empty' "$SEQ_SECRETS_FILE" 2>/dev/null)
+
+        if [ -z "$admin_user" ]; then
+            read -p "Enter Seq admin username: " admin_user
         fi
 
-        log_info "Fresh Seq detected. Creating admin key..."
-        admin_key=$(create_admin_api_key)
-
-        if [ -z "$admin_key" ] || [ "$admin_key" = "null" ]; then
-            log_error "Failed to create admin key"
-            exit 1
+        if [ -z "$admin_pass" ]; then
+            read -s -p "Enter Seq admin password: " admin_pass
+            echo ""
         fi
 
-        echo "{ \"adminApiKey\": \"$admin_key\", \"projects\": {} }" > "$SEQ_SECRETS_FILE"
+        cookie=$(seq_login "$admin_user" "$admin_pass") || exit 1
+
+        auth_header="-H Cookie:$cookie"
+
+        # save credentials (optional)
+        if [ ! -f "$SEQ_SECRETS_FILE" ]; then
+            echo "{ \"projects\": {} }" > "$SEQ_SECRETS_FILE"
+        fi
+
+        tmp=$(mktemp)
+        jq ".adminUsername=\"$admin_user\" | .adminPassword=\"$admin_pass\"" \
+            "$SEQ_SECRETS_FILE" > "$tmp" && mv "$tmp" "$SEQ_SECRETS_FILE"
+
         chmod 600 "$SEQ_SECRETS_FILE"
 
-        log_success "Admin key created and saved"
+    else
+        log_info "Seq running in anonymous mode"
+        if [ ! -f "$SEQ_SECRETS_FILE" ]; then
+            echo "{ \"projects\": {} }" > "$SEQ_SECRETS_FILE"
+            chmod 600 "$SEQ_SECRETS_FILE"
+        fi
     fi
 
-    # -----------------------------
-    # GET EXISTING KEYS FROM SEQ
-    # -----------------------------
-    response=$(seq_api_call "GET" "/api/apikeys" "" \
-    "-H X-Seq-ApiKey:$admin_key")
-
-    existing_keys=$(echo "$response" | sed '$d')
-    status=$(echo "$response" | tail -n1)
-
-    if [ "$status" != "200" ]; then
-        log_error "Failed to fetch API keys (HTTP $status)"
-        echo "$existing_keys"
-        exit 1
-    fi
-
-    if echo "$existing_keys" | grep -q "Unauthorized"; then
-        log_error "Admin API key invalid"
-        exit 1
-    fi
-
-    # -----------------------------
+    # -------------------------------------------------
     # SYNC PROJECT KEYS
-    # -----------------------------
+    # -------------------------------------------------
+
     i=0
     while [ $i -lt "$PROJECT_COUNT" ]; do
 
@@ -435,14 +464,10 @@ bootstrap_seq_security() {
         stored_key=$(jq -r ".projects.$project // empty" "$SEQ_SECRETS_FILE")
 
         if [ -z "$stored_key" ]; then
-            log_info "Creating API key for new project: $project"
 
-            new_key=$(create_project_api_key "$project" "$admin_key")
+            log_info "Creating API key for project: $project"
 
-            if [ -z "$new_key" ] || [ "$new_key" = "null" ]; then
-                log_error "Failed to create API key for $project"
-                exit 1
-            fi
+            new_key=$(create_project_api_key "$project" "$auth_header") || exit 1
 
             tmp=$(mktemp)
             jq ".projects.$project = \"$new_key\"" \
@@ -454,12 +479,13 @@ bootstrap_seq_security() {
         i=$((i + 1))
     done
 
-    # -----------------------------
-    # REMOVE KEYS FOR DELETED PROJECTS
-    # -----------------------------
+    # -------------------------------------------------
+    # REMOVE DELETED PROJECT KEYS
+    # -------------------------------------------------
+
     for stored_project in $(jq -r '.projects | keys[]' "$SEQ_SECRETS_FILE"); do
 
-        exists_in_config=false
+        exists=false
 
         j=0
         while [ $j -lt "$PROJECT_COUNT" ]; do
@@ -467,19 +493,20 @@ bootstrap_seq_security() {
             project=$(echo "$network" | cut -d'-' -f1)
 
             if [ "$stored_project" = "$project" ]; then
-                exists_in_config=true
+                exists=true
                 break
             fi
 
             j=$((j + 1))
         done
 
-        if [ "$exists_in_config" = false ]; then
+        if [ "$exists" = false ]; then
+
             log_warn "Removing API key for deleted project: $stored_project"
 
-            key_to_delete=$(jq -r ".projects.$stored_project" "$SEQ_SECRETS_FILE")
+            token=$(jq -r ".projects.$stored_project" "$SEQ_SECRETS_FILE")
 
-            delete_api_key "$key_to_delete" "$admin_key"
+            delete_api_key "$token" "$auth_header"
 
             tmp=$(mktemp)
             jq "del(.projects.$stored_project)" \
