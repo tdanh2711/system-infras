@@ -103,13 +103,15 @@ sinks:
   seq:
     type: http
     inputs: ["parse_logs", "parse_http_logs"]
-    uri: "http://system-seq:80/api/events/raw?clef"
+    uri: "http://system-seq:80/api/events/raw?clef&apiKey=KeFsILMp6Y8VqAj5s2Bq"
     method: post
-    # ĐỔI THÀNH NDJSON: Seq xử lý hàng loạt tốt nhất với định dạng này
     encoding:
-      codec: json
+      codec: "json"
+    framing:
+      method: "newline_delimited"
     request:
       headers:
+        Content-Type: "application/vnd.serilog.clef"
         X-Seq-ApiKey: "${SEQ_API_KEY}"
       concurrency: 10
       rate_limit_num: 100

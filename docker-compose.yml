@@ -63,7 +63,7 @@ services:
     container_name: system-vector
     restart: unless-stopped
     volumes:
-      - ./logging/vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./logging/vector/vector.generated.yaml:/etc/vector/vector.yaml:ro
       - ./logging/vector/data:/vector/data:rw
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:

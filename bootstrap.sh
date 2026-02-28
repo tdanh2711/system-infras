@@ -41,6 +41,19 @@ else
 fi
 
 # =============================================================================
+# SEQ CONFIGURATION
+# =============================================================================
+SEQ_CONTAINER="system-seq"
+SEQ_INTERNAL_URL="http://system-seq:80"
+SEQ_SECRETS_FILE="${CONFIG_DIR}/seq-secrets.json"
+
+# =============================================================================
+# VECTOR CONFIGURATION
+# =============================================================================
+VECTOR_CONFIG_FILE="${CONFIG_DIR}/vector.generated.yaml"
+VECTOR_CONTAINER="system-vector"
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 log_info() {
@@ -233,6 +246,51 @@ validate_environment() {
 }
 
 # =============================================================================
+# SEQ SECURITY FUNCTIONS
+# =============================================================================
+
+wait_for_seq() {
+    log_info "Waiting for Seq to be ready..."
+    until curl -s "$SEQ_INTERNAL_URL" >/dev/null 2>&1; do
+        sleep 2
+    done
+    log_success "Seq is ready"
+}
+
+seq_auth_enabled() {
+    status=$(curl -s -o /dev/null -w "%{http_code}" "$SEQ_INTERNAL_URL/api/apikeys")
+    if [ "$status" = "401" ]; then
+        return 0   # auth enabled
+    else
+        return 1   # auth disabled
+    fi
+}
+
+create_admin_api_key() {
+    curl -s -X POST "$SEQ_INTERNAL_URL/api/apikeys" \
+        -H "Content-Type: application/json" \
+        -d '{
+              "Title": "admin-key"
+            }' | jq -r '.ApiKey'
+}
+
+create_project_api_key() {
+
+    project="$1"
+    admin_key="$2"
+
+    curl -s -X POST "$SEQ_INTERNAL_URL/api/apikeys" \
+        -H "Content-Type: application/json" \
+        -H "X-Seq-ApiKey: $admin_key" \
+        -d "{
+              \"Title\": \"${project}-key\",
+              \"Properties\": {
+                \"project\": \"${project}\"
+              }
+            }" | jq -r '.ApiKey'
+}
+
+# =============================================================================
 # MAIN FUNCTIONS
 # =============================================================================
 load_configuration() {
@@ -247,6 +305,209 @@ load_configuration() {
     fi
 
     log_success "Loaded $PROJECT_COUNT project(s)"
+}
+
+bootstrap_seq_security() {
+
+    log_info "Bootstrapping / Syncing Seq security..."
+
+    wait_for_seq
+
+    # -----------------------------
+    # LOAD OR CREATE ADMIN KEY
+    # -----------------------------
+    if [ -f "$SEQ_SECRETS_FILE" ]; then
+        admin_key=$(jq -r '.adminApiKey' "$SEQ_SECRETS_FILE")
+        log_info "Loaded existing admin API key"
+    else
+        if seq_auth_enabled; then
+            log_error "Seq already secured but no secrets file found."
+            exit 1
+        fi
+
+        log_info "Fresh Seq detected. Creating admin key..."
+        admin_key=$(create_admin_api_key)
+
+        if [ -z "$admin_key" ] || [ "$admin_key" = "null" ]; then
+            log_error "Failed to create admin key"
+            exit 1
+        fi
+
+        echo "{ \"adminApiKey\": \"$admin_key\", \"projects\": {} }" > "$SEQ_SECRETS_FILE"
+        chmod 600 "$SEQ_SECRETS_FILE"
+
+        log_success "Admin key created and saved"
+    fi
+
+    # -----------------------------
+    # GET EXISTING KEYS FROM SEQ
+    # -----------------------------
+    existing_keys=$(curl -s "$SEQ_INTERNAL_URL/api/apikeys" \
+        -H "X-Seq-ApiKey: $admin_key")
+
+    if echo "$existing_keys" | grep -q "Unauthorized"; then
+        log_error "Admin API key invalid"
+        exit 1
+    fi
+
+    # -----------------------------
+    # SYNC PROJECT KEYS
+    # -----------------------------
+    i=0
+    while [ $i -lt "$PROJECT_COUNT" ]; do
+
+        network=$(get_project_field $i "network")
+        project=$(echo "$network" | cut -d'-' -f1)
+
+        stored_key=$(jq -r ".projects.$project // empty" "$SEQ_SECRETS_FILE")
+
+        if [ -z "$stored_key" ]; then
+            log_info "Creating API key for new project: $project"
+
+            new_key=$(create_project_api_key "$project" "$admin_key")
+
+            if [ -z "$new_key" ] || [ "$new_key" = "null" ]; then
+                log_error "Failed to create API key for $project"
+                exit 1
+            fi
+
+            tmp=$(mktemp)
+            jq ".projects.$project = \"$new_key\"" \
+                "$SEQ_SECRETS_FILE" > "$tmp" && mv "$tmp" "$SEQ_SECRETS_FILE"
+
+            log_success "Created API key for $project"
+        fi
+
+        i=$((i + 1))
+    done
+
+    # -----------------------------
+    # REMOVE KEYS FOR DELETED PROJECTS
+    # -----------------------------
+    for stored_project in $(jq -r '.projects | keys[]' "$SEQ_SECRETS_FILE"); do
+
+        exists_in_config=false
+
+        j=0
+        while [ $j -lt "$PROJECT_COUNT" ]; do
+            network=$(get_project_field $j "network")
+            project=$(echo "$network" | cut -d'-' -f1)
+
+            if [ "$stored_project" = "$project" ]; then
+                exists_in_config=true
+                break
+            fi
+
+            j=$((j + 1))
+        done
+
+        if [ "$exists_in_config" = false ]; then
+            log_warn "Removing API key for deleted project: $stored_project"
+
+            key_to_delete=$(jq -r ".projects.$stored_project" "$SEQ_SECRETS_FILE")
+
+            curl -s -X DELETE "$SEQ_INTERNAL_URL/api/apikeys/$key_to_delete" \
+                -H "X-Seq-ApiKey: $admin_key" >/dev/null 2>&1
+
+            tmp=$(mktemp)
+            jq "del(.projects.$stored_project)" \
+                "$SEQ_SECRETS_FILE" > "$tmp" && mv "$tmp" "$SEQ_SECRETS_FILE"
+
+            log_success "Removed API key for $stored_project"
+        fi
+    done
+
+    log_success "Seq security sync complete"
+}
+
+generate_vector_config() {
+
+    log_info "Generating Vector configuration..."
+
+    admin_key=$(jq -r '.adminApiKey' "$SEQ_SECRETS_FILE")
+
+    echo "data_dir: /var/lib/vector" > "$VECTOR_CONFIG_FILE"
+
+    cat >> "$VECTOR_CONFIG_FILE" <<EOF
+
+sources:
+  docker_logs:
+    type: docker_logs
+
+transforms:
+
+  enrich:
+    type: remap
+    inputs: [docker_logs]
+    source: |
+      parts = split(.container_name, "-")
+      if length(parts) >= 2 {
+        .project = parts[0]
+        .service = join(slice(parts, 1, length(parts)), "-")
+      }
+
+  route_by_project:
+    type: route
+    inputs: [enrich]
+    route:
+EOF
+
+    # Route section
+    i=0
+    while [ $i -lt "$PROJECT_COUNT" ]; do
+        network=$(get_project_field $i "network")
+        project=$(echo "$network" | cut -d'-' -f1)
+
+        echo "      ${project}: '.project == \"${project}\"'" >> "$VECTOR_CONFIG_FILE"
+
+        i=$((i + 1))
+    done
+
+    # Sink section
+    echo "" >> "$VECTOR_CONFIG_FILE"
+    echo "sinks:" >> "$VECTOR_CONFIG_FILE"
+
+    for project in $(jq -r '.projects | keys[]' "$SEQ_SECRETS_FILE"); do
+
+        key=$(jq -r ".projects.$project" "$SEQ_SECRETS_FILE")
+
+        cat >> "$VECTOR_CONFIG_FILE" <<EOF
+
+  seq_${project}:
+    type: http
+    inputs: [route_by_project.${project}]
+    uri: "http://system-seq:80/ingest/clef"
+    method: post
+    request:
+      headers:
+        Content-Type: "application/vnd.serilog.clef"
+        X-Seq-ApiKey: "${key}"
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    buffer:
+      type: disk
+      max_size: 5gb
+      when_full: block
+EOF
+
+    done
+
+    log_success "Vector config generated at $VECTOR_CONFIG_FILE"
+}
+
+reload_vector() {
+
+    log_info "Reloading Vector..."
+
+    if ! container_running "$VECTOR_CONTAINER"; then
+        log_warn "Vector container not running"
+        return
+    fi
+
+    docker restart "$VECTOR_CONTAINER"
+    log_success "Vector restarted"
 }
 
 create_logging_network() {
@@ -467,6 +728,9 @@ main() {
 
     validate_environment
     load_configuration
+    bootstrap_seq_security
+    generate_vector_config
+    reload_vector
     create_logging_network
     connect_caddy_to_networks
     setup_project_caddyfiles
