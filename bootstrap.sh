@@ -259,11 +259,26 @@ seq_auth_enabled() {
 }
 
 create_admin_api_key() {
-    curl -s -X POST "$SEQ_INTERNAL_URL/api/apikeys" \
+
+    response=$(curl -s -w "\n%{http_code}" \
+        -X POST "$SEQ_INTERNAL_URL/api/apikeys" \
         -H "Content-Type: application/json" \
         -d '{
               "Title": "admin-key"
-            }' | jq -r '.ApiKey'
+            }')
+
+    body=$(echo "$response" | sed '$d')
+    status=$(echo "$response" | tail -n1)
+
+    if [ "$status" != "201" ] && [ "$status" != "200" ]; then
+        log_error "Seq API returned HTTP $status"
+        echo "---- Response Body ----"
+        echo "$body"
+        echo "-----------------------"
+        return 1
+    fi
+
+    echo "$body" | jq -r '.ApiKey'
 }
 
 create_project_api_key() {
