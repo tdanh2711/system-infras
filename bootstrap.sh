@@ -51,7 +51,7 @@ SEQ_SECRETS_FILE="${CONFIG_DIR}/seq-secrets.json"
 # =============================================================================
 # VECTOR CONFIGURATION
 # =============================================================================
-VECTOR_CONFIG_FILE="${CONFIG_DIR}/vector.generated.yaml"
+VECTOR_CONFIG_FILE="${SCRIPT_DIR}/logging/vector/vector.generated.yaml"
 VECTOR_CONTAINER="system-vector"
 
 # =============================================================================
