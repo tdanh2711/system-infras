@@ -326,7 +326,7 @@ create_project_api_key() {
     auth_header="$2"
 
     response=$(seq_api_call "POST" "/api/apikeys" \
-        "{\"Title\":\"${project}-key\",\"Properties\":{\"project\":\"${project}\"}}" \
+        "{\"Title\":\"${project}-key\",\"Token\":null,\"TokenPrefix\":null,\"InputSettings\":{\"AppliedProperties\":[{\"Name\":\"project\",\"Value\":\"${project}\"}],\"Filter\":{\"Description\":null,\"DescriptionIsExcluded\":false,\"Filter\":null,\"FilterNonStrict\":null},\"MinimumLevel\":null,\"UseServerTimestamps\":false},\"IsDefault\":false,\"OwnerId\":null,\"AssignedPermissions\":[\"Ingest\"],\"Id\":null,\"Links\":{\"Create\":\"api/apikeys/\"}}" \
         "$auth_header")
 
     body=$(echo "$response" | sed '$d')
@@ -547,11 +547,122 @@ transforms:
     type: remap
     inputs: [docker_logs]
     source: |
-        parts = split(to_string!(.container_name), "-")
-        if length(parts) >= 2 {
-            .project = parts[0]
-            .service, err = join(slice!(parts, 1), "-")
+
+      # ---------------------------------------------------
+      # 1. Parse container name → project/service
+      # ---------------------------------------------------
+
+      parts = split(to_string!(.container_name), "-")
+      if length(parts) >= 2 {
+        .project = parts[0]
+        .service = join(slice!(parts, 1), "-")
+      }
+
+      # ---------------------------------------------------
+      # 2. Try parse JSON log message
+      # ---------------------------------------------------
+
+      original_message = to_string!(.message)
+
+      if is_string(.message) {
+        parsed, err = parse_json(.message)
+        if err == null {
+
+          .msg = parsed.msg ?? parsed.message ?? original_message
+          .level = parsed.level ?? parsed.severity ?? "info"
+          .timestamp = parsed.timestamp ?? parsed.time ?? parsed.ts ?? null
+
+          del(parsed.msg)
+          del(parsed.message)
+          del(parsed.level)
+          del(parsed.severity)
+          del(parsed.timestamp)
+          del(parsed.time)
+          del(parsed.ts)
+
+          . = merge!(., parsed)
         }
+      }
+
+      # ---------------------------------------------------
+      # 3. Normalize level
+      # ---------------------------------------------------
+
+      .level = downcase(to_string(.level) ?? "info")
+
+      if .level == "warning" {
+        .level = "warn"
+      } else if .level == "fatal" || .level == "critical" {
+        .level = "error"
+      } else if .level == "trace" {
+        .level = "debug"
+      }
+
+      # Map to CLEF level casing
+      if .level == "debug" {
+        clef_level = "Debug"
+      } else if .level == "info" {
+        clef_level = "Information"
+      } else if .level == "warn" {
+        clef_level = "Warning"
+      } else if .level == "error" {
+        clef_level = "Error"
+      } else {
+        clef_level = "Information"
+      }
+
+      # ---------------------------------------------------
+      # 4. Timestamp handling (CRITICAL FOR CLEF)
+      # ---------------------------------------------------
+
+      ts = null
+
+      # If JSON provided timestamp
+      if exists(.timestamp) && .timestamp != null {
+        parsed_ts, err = parse_timestamp(.timestamp)
+        if err == null {
+          ts = parsed_ts
+        }
+      }
+
+      # Fallback to docker log timestamp
+      if ts == null && exists(.timestamp) == false && exists(.timestamp) == false {
+        if exists(.timestamp) {
+          parsed_ts, err = parse_timestamp(.timestamp)
+          if err == null {
+            ts = parsed_ts
+          }
+        }
+      }
+
+      # Final fallback: now()
+      if ts == null {
+        ts = now()
+      }
+
+      # ---------------------------------------------------
+      # 5. Build CLEF event
+      # ---------------------------------------------------
+
+      .@t = format_timestamp!(ts, "%+")
+      .@m = original_message
+      .@l = clef_level
+
+      # Optional event id
+      if exists(.container_id) {
+        .@i = to_string!(.container_id)
+      }
+
+      # ---------------------------------------------------
+      # 6. Cleanup
+      # ---------------------------------------------------
+
+      del(.message)
+      del(.msg)
+      del(.timestamp)
+      del(.level)
+      del(.container_name)
+      del(.container_id)
 
   route_by_project:
     type: route
