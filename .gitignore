@@ -16,6 +16,7 @@ caddy/config/
 
 # Seq data
 logging/seq/data/
+config/seq-secrets.json
 
 # Vector buffer data
 logging/vector/data/
