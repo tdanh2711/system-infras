@@ -547,10 +547,10 @@ transforms:
     type: remap
     inputs: [docker_logs]
     source: |
-        parts = split!(to_string!(.container_name), "-")
+        parts = split(to_string!(.container_name), "-")
         if length(parts) >= 2 {
             .project = parts[0]
-            .service = join!(slice!(parts, 1), "-")
+            .service = join(slice(parts, 1), "-")
         }
 
   route_by_project:
