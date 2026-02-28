@@ -555,111 +555,103 @@ transforms:
       parts = split(to_string!(.container_name), "-")
       if length(parts) >= 2 {
         .project = parts[0]
-        .service = join(slice!(parts, 1), "-")
+        .service, err = join(slice!(parts, 1), "-")
+        if err != null {
+          .service = "unknown"
+        }
       }
 
-      # ---------------------------------------------------
-      # 2. Try parse JSON log message
-      # ---------------------------------------------------
+      # -------------------------------------------------
+      # 2. Preserve original message
+      # -------------------------------------------------
 
-      original_message = to_string!(.message)
+      message = to_string!(.message)
+
+      # -------------------------------------------------
+      # 3. Try parse JSON log
+      # -------------------------------------------------
 
       if is_string(.message) {
         parsed, err = parse_json(.message)
         if err == null {
 
-          .msg = parsed.msg ?? parsed.message ?? original_message
-          .level = parsed.level ?? parsed.severity ?? "info"
-          .timestamp = parsed.timestamp ?? parsed.time ?? parsed.ts ?? null
+          if exists(parsed.message) {
+            message = to_string!(parsed.message)
+            del(parsed.message)
+          }
 
-          del(parsed.msg)
-          del(parsed.message)
-          del(parsed.level)
-          del(parsed.severity)
-          del(parsed.timestamp)
-          del(parsed.time)
-          del(parsed.ts)
+          if exists(parsed.msg) {
+            message = to_string!(parsed.msg)
+            del(parsed.msg)
+          }
+
+          if exists(parsed.level) {
+            .level = to_string!(parsed.level)
+            del(parsed.level)
+          }
+
+          if exists(parsed.severity) {
+            .level = to_string!(parsed.severity)
+            del(parsed.severity)
+          }
 
           . = merge!(., parsed)
         }
       }
 
-      # ---------------------------------------------------
-      # 3. Normalize level
-      # ---------------------------------------------------
+      # -------------------------------------------------
+      # 4. Normalize level
+      # -------------------------------------------------
 
-      .level = downcase(to_string(.level) ?? "info")
-
-      if .level == "warning" {
-        .level = "warn"
-      } else if .level == "fatal" || .level == "critical" {
-        .level = "error"
-      } else if .level == "trace" {
-        .level = "debug"
+      if !exists(.level) {
+        .level = "info"
       }
 
-      # Map to CLEF level casing
+      .level = downcase(to_string!(.level))
+
+      if .level == "warning" { .level = "warn" }
+      if .level == "fatal" { .level = "error" }
+      if .level == "critical" { .level = "error" }
+      if .level == "trace" { .level = "debug" }
+
       if .level == "debug" {
-        clef_level = "Debug"
+        .@l = "Debug"
       } else if .level == "info" {
-        clef_level = "Information"
+        .@l = "Information"
       } else if .level == "warn" {
-        clef_level = "Warning"
+        .@l = "Warning"
       } else if .level == "error" {
-        clef_level = "Error"
+        .@l = "Error"
       } else {
-        clef_level = "Information"
+        .@l = "Information"
       }
 
-      # ---------------------------------------------------
-      # 4. Timestamp handling (CRITICAL FOR CLEF)
-      # ---------------------------------------------------
+      # -------------------------------------------------
+      # 5. Timestamp (Docker source already RFC3339)
+      # -------------------------------------------------
 
-      ts = null
-
-      # If JSON provided timestamp
-      if exists(.timestamp) && .timestamp != null {
-        parsed_ts, err = parse_timestamp(.timestamp)
-        if err == null {
-          ts = parsed_ts
-        }
+      if exists(.timestamp) {
+        .@t = to_string!(.timestamp)
+      } else {
+        .@t = format_timestamp!(now(), "%+")
       }
 
-      # Fallback to docker log timestamp
-      if ts == null && exists(.timestamp) == false && exists(.timestamp) == false {
-        if exists(.timestamp) {
-          parsed_ts, err = parse_timestamp(.timestamp)
-          if err == null {
-            ts = parsed_ts
-          }
-        }
-      }
+      # -------------------------------------------------
+      # 6. CLEF message (rendered)
+      # -------------------------------------------------
 
-      # Final fallback: now()
-      if ts == null {
-        ts = now()
-      }
-
-      # ---------------------------------------------------
-      # 5. Build CLEF event
-      # ---------------------------------------------------
-
-      .@t = format_timestamp!(ts, "%+")
-      .@m = original_message
-      .@l = clef_level
+      .@m = message
 
       # Optional event id
       if exists(.container_id) {
         .@i = to_string!(.container_id)
       }
 
-      # ---------------------------------------------------
-      # 6. Cleanup
-      # ---------------------------------------------------
+      # -------------------------------------------------
+      # 7. Cleanup
+      # -------------------------------------------------
 
       del(.message)
-      del(.msg)
-      del(.timestamp)
       del(.level)
       del(.container_name)
       del(.container_id)
