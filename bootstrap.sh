@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
 # =============================================================================
 # SYSTEM-INFRAS BOOTSTRAP SCRIPT
 # =============================================================================
@@ -277,7 +278,7 @@ seq_api_call() {
 
 seq_auth_enabled() {
 
-    response=$(seq_api_call "GET" "/api" "" "")
+    response=$(seq_api_call "GET" "/api/apikeys" "" "")
     status=$(echo "$response" | tail -n1)
 
     if [ "$status" = "401" ]; then
