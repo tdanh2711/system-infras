@@ -19,6 +19,7 @@ logging/seq/data/
 
 # Vector buffer data
 logging/vector/data/
+logging/vector/vector.generated.yaml
 
 # Log files
 *.log
