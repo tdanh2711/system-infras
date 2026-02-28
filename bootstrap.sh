@@ -417,8 +417,13 @@ bootstrap_seq_security() {
 
         log_info "Seq authentication is enabled"
 
-        admin_user=$(jq -r '.adminUsername // empty' "$SEQ_SECRETS_FILE" 2>/dev/null)
-        admin_pass=$(jq -r '.adminPassword // empty' "$SEQ_SECRETS_FILE" 2>/dev/null)
+        if [ ! -f "$SEQ_SECRETS_FILE" ]; then
+            echo "{ \"projects\": {} }" > "$SEQ_SECRETS_FILE"
+            chmod 600 "$SEQ_SECRETS_FILE"
+        fi
+
+        admin_user=$(jq -r '.adminUsername // empty' "$SEQ_SECRETS_FILE")
+        admin_pass=$(jq -r '.adminPassword // empty' "$SEQ_SECRETS_FILE")
 
         if [ -z "$admin_user" ]; then
             read -p "Enter Seq admin username: " admin_user
@@ -429,27 +434,29 @@ bootstrap_seq_security() {
             echo ""
         fi
 
-        cookie=$(seq_login "$admin_user" "$admin_pass") || exit 1
+        log_info "Logging into Seq..."
+
+        cookie=$(seq_login "$admin_user" "$admin_pass")
+
+        if [ -z "$cookie" ]; then
+            log_error "Seq login failed"
+            exit 1
+        fi
 
         auth_header="-H Cookie:$cookie"
 
-        # save credentials (optional)
-        if [ ! -f "$SEQ_SECRETS_FILE" ]; then
-            echo "{ \"projects\": {} }" > "$SEQ_SECRETS_FILE"
-        fi
-
+        # Save credentials
         tmp=$(mktemp)
         jq ".adminUsername=\"$admin_user\" | .adminPassword=\"$admin_pass\"" \
             "$SEQ_SECRETS_FILE" > "$tmp" && mv "$tmp" "$SEQ_SECRETS_FILE"
 
         chmod 600 "$SEQ_SECRETS_FILE"
 
+        log_success "Login successful"
+
     else
         log_info "Seq running in anonymous mode"
-        if [ ! -f "$SEQ_SECRETS_FILE" ]; then
-            echo "{ \"projects\": {} }" > "$SEQ_SECRETS_FILE"
-            chmod 600 "$SEQ_SECRETS_FILE"
-        fi
+        auth_header=""
     fi
 
     # -------------------------------------------------
