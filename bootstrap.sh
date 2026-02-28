@@ -595,7 +595,7 @@ EOF
       method: newline_delimited
     buffer:
       type: disk
-      max_size: 5gb
+      max_size: 268435488
       when_full: block
 EOF
 
