@@ -249,6 +249,22 @@ validate_environment() {
 # SEQ SECURITY FUNCTIONS
 # =============================================================================
 
+seq_api_call() {
+    method="$1"
+    endpoint="$2"
+    data="$3"
+    header="$4"
+
+    docker exec "$SEQ_CONTAINER" sh -c "
+        curl -s -w '\n%{http_code}' \
+        -X $method \
+        http://localhost$endpoint \
+        -H 'Content-Type: application/json' \
+        $header \
+        ${data:+-d '$data'}
+    "
+}
+
 seq_auth_enabled() {
     status=$(curl -s -o /dev/null -w "%{http_code}" "$SEQ_INTERNAL_URL/api/apikeys")
     if [ "$status" = "401" ]; then
@@ -260,21 +276,15 @@ seq_auth_enabled() {
 
 create_admin_api_key() {
 
-    response=$(curl -s -w "\n%{http_code}" \
-        -X POST "$SEQ_INTERNAL_URL/api/apikeys" \
-        -H "Content-Type: application/json" \
-        -d '{
-              "Title": "admin-key"
-            }')
+    response=$(seq_api_call "POST" "/api/apikeys" \
+        '{"Title":"admin-key"}')
 
     body=$(echo "$response" | sed '$d')
     status=$(echo "$response" | tail -n1)
 
     if [ "$status" != "201" ] && [ "$status" != "200" ]; then
         log_error "Seq API returned HTTP $status"
-        echo "---- Response Body ----"
         echo "$body"
-        echo "-----------------------"
         return 1
     fi
 
@@ -286,15 +296,20 @@ create_project_api_key() {
     project="$1"
     admin_key="$2"
 
-    curl -s -X POST "$SEQ_INTERNAL_URL/api/apikeys" \
-        -H "Content-Type: application/json" \
-        -H "X-Seq-ApiKey: $admin_key" \
-        -d "{
-              \"Title\": \"${project}-key\",
-              \"Properties\": {
-                \"project\": \"${project}\"
-              }
-            }" | jq -r '.ApiKey'
+    response=$(seq_api_call "POST" "/api/apikeys" \
+        "{\"Title\":\"${project}-key\",\"Properties\":{\"project\":\"${project}\"}}" \
+        "-H 'X-Seq-ApiKey: $admin_key'")
+
+    body=$(echo "$response" | sed '$d')
+    status=$(echo "$response" | tail -n1)
+
+    if [ "$status" != "201" ] && [ "$status" != "200" ]; then
+        log_error "Failed to create API key for $project (HTTP $status)"
+        echo "$body"
+        return 1
+    fi
+
+    echo "$body" | jq -r '.ApiKey'
 }
 
 # =============================================================================
