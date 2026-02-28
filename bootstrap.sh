@@ -290,7 +290,7 @@ create_admin_api_key() {
         return 1
     fi
 
-    echo "$body" | jq -r '.ApiKey'
+    echo "$body" | jq -r '.Token'
 }
 
 create_project_api_key() {
@@ -311,21 +311,44 @@ create_project_api_key() {
         return 1
     fi
 
-    echo "$body" | jq -r '.ApiKey'
+    echo "$body" | jq -r '.Token'
+}
+
+get_api_key_id_by_token() {
+
+    token="$1"
+    admin_key="$2"
+
+    response=$(seq_api_call "GET" "/api/apikeys" "" \
+        "-H X-Seq-ApiKey:$admin_key")
+
+    body=$(echo "$response" | sed '$d')
+
+    echo "$body" | jq -r \
+        ".[] | select(.Token==\"$token\") | .Id"
 }
 
 delete_api_key() {
 
-    key="$1"
+    token="$1"
     admin_key="$2"
 
-    response=$(seq_api_call "DELETE" "/api/apikeys/$key" "" \
+    id=$(get_api_key_id_by_token "$token" "$admin_key")
+
+    if [ -z "$id" ] || [ "$id" = "null" ]; then
+        log_warn "Could not find API key id for token"
+        return
+    fi
+
+    response=$(seq_api_call "DELETE" "/api/apikeys/$id" "" \
         "-H X-Seq-ApiKey:$admin_key")
 
     status=$(echo "$response" | tail -n1)
 
     if [ "$status" != "200" ] && [ "$status" != "204" ]; then
-        log_warn "Failed to delete API key $key (HTTP $status)"
+        log_warn "Failed to delete API key (HTTP $status)"
+    else
+        log_success "Deleted API key $id"
     fi
 }
 
