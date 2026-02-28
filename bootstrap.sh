@@ -268,7 +268,11 @@ seq_api_call() {
 }
 
 seq_auth_enabled() {
-    status=$(curl -s -o /dev/null -w "%{http_code}" "$SEQ_INTERNAL_URL/api/apikeys")
+
+    response=$(seq_api_call "GET" "/api/apikeys" "" "")
+
+    status=$(echo "$response" | tail -n1)
+
     if [ "$status" = "401" ]; then
         return 0   # auth enabled
     else
@@ -402,8 +406,17 @@ bootstrap_seq_security() {
     # -----------------------------
     # GET EXISTING KEYS FROM SEQ
     # -----------------------------
-    existing_keys=$(curl -s "$SEQ_INTERNAL_URL/api/apikeys" \
-        -H "X-Seq-ApiKey: $admin_key")
+    response=$(seq_api_call "GET" "/api/apikeys" "" \
+    "-H X-Seq-ApiKey:$admin_key")
+
+    existing_keys=$(echo "$response" | sed '$d')
+    status=$(echo "$response" | tail -n1)
+
+    if [ "$status" != "200" ]; then
+        log_error "Failed to fetch API keys (HTTP $status)"
+        echo "$existing_keys"
+        exit 1
+    fi
 
     if echo "$existing_keys" | grep -q "Unauthorized"; then
         log_error "Admin API key invalid"
