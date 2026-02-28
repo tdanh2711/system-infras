@@ -250,19 +250,21 @@ validate_environment() {
 # =============================================================================
 
 seq_api_call() {
+
     method="$1"
     endpoint="$2"
     data="$3"
-    header="$4"
+    extra_header="$4"
 
-    docker exec "$SEQ_CONTAINER" sh -c "
-        curl -s -w '\n%{http_code}' \
-        -X $method \
-        http://localhost$endpoint \
-        -H 'Content-Type: application/json' \
-        $header \
-        ${data:+-d '$data'}
-    "
+    docker run --rm \
+        --network "$LOGGING_NETWORK" \
+        curlimages/curl:8.5.0 \
+        curl -s -w "\n%{http_code}" \
+        -X "$method" \
+        "http://system-seq:80$endpoint" \
+        -H "Content-Type: application/json" \
+        $extra_header \
+        ${data:+-d "$data"}
 }
 
 seq_auth_enabled() {
@@ -283,7 +285,7 @@ create_admin_api_key() {
     status=$(echo "$response" | tail -n1)
 
     if [ "$status" != "201" ] && [ "$status" != "200" ]; then
-        log_error "Seq API returned HTTP $status"
+        log_error "Failed to create admin key (HTTP $status)"
         echo "$body"
         return 1
     fi
@@ -298,7 +300,7 @@ create_project_api_key() {
 
     response=$(seq_api_call "POST" "/api/apikeys" \
         "{\"Title\":\"${project}-key\",\"Properties\":{\"project\":\"${project}\"}}" \
-        "-H 'X-Seq-ApiKey: $admin_key'")
+        "-H X-Seq-ApiKey:$admin_key")
 
     body=$(echo "$response" | sed '$d')
     status=$(echo "$response" | tail -n1)
@@ -310,6 +312,21 @@ create_project_api_key() {
     fi
 
     echo "$body" | jq -r '.ApiKey'
+}
+
+delete_api_key() {
+
+    key="$1"
+    admin_key="$2"
+
+    response=$(seq_api_call "DELETE" "/api/apikeys/$key" "" \
+        "-H X-Seq-ApiKey:$admin_key")
+
+    status=$(echo "$response" | tail -n1)
+
+    if [ "$status" != "200" ] && [ "$status" != "204" ]; then
+        log_warn "Failed to delete API key $key (HTTP $status)"
+    fi
 }
 
 # =============================================================================
@@ -426,8 +443,7 @@ bootstrap_seq_security() {
 
             key_to_delete=$(jq -r ".projects.$stored_project" "$SEQ_SECRETS_FILE")
 
-            curl -s -X DELETE "$SEQ_INTERNAL_URL/api/apikeys/$key_to_delete" \
-                -H "X-Seq-ApiKey: $admin_key" >/dev/null 2>&1
+            delete_api_key "$key_to_delete" "$admin_key"
 
             tmp=$(mktemp)
             jq "del(.projects.$stored_project)" \
