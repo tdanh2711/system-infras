@@ -249,14 +249,6 @@ validate_environment() {
 # SEQ SECURITY FUNCTIONS
 # =============================================================================
 
-wait_for_seq() {
-    log_info "Waiting for Seq to be ready..."
-    until curl -s "$SEQ_INTERNAL_URL" >/dev/null 2>&1; do
-        sleep 2
-    done
-    log_success "Seq is ready"
-}
-
 seq_auth_enabled() {
     status=$(curl -s -o /dev/null -w "%{http_code}" "$SEQ_INTERNAL_URL/api/apikeys")
     if [ "$status" = "401" ]; then
@@ -310,8 +302,6 @@ load_configuration() {
 bootstrap_seq_security() {
 
     log_info "Bootstrapping / Syncing Seq security..."
-
-    wait_for_seq
 
     # -----------------------------
     # LOAD OR CREATE ADMIN KEY
